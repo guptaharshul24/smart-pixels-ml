@@ -43,7 +43,9 @@ def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
         padding="valid", 
         data_format=None,        
     )(var)
+    tf.debugging.check_numerics(proj_x, "nan after proj_x AveragePooling2D")
     proj_x = Flatten(name="flatten_x")(proj_x)
+    tf.debugging.check_numerics(proj_x, "nan after proj_x Flatten")
 
     proj_y = AveragePooling2D(
         pool_size=(hidden_dimy, 1), 
@@ -51,7 +53,10 @@ def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
         padding="valid", 
         data_format=None,        
     )(var)
+    tf.debugging.check_numerics(proj_y, "nan after proj_y AveragePooling2D")
     proj_y = Flatten(name="flatten_y")(proj_y)
+    tf.debugging.check_numerics(proj_y, "nan after proj_y Flatten")
+
 
     proj_x = QDense(
         hidden_dimx,
@@ -60,7 +65,10 @@ def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
         kernel_regularizer=tf.keras.regularizers.L1L2(0.01),
         activity_regularizer=tf.keras.regularizers.L2(0.01),
     )(proj_x)
+    tf.debugging.check_numerics(proj_x, "nan after proj_x QDense")
     proj_x = QActivation("quantized_relu(bits=13, integer=5)(x)")(proj_x)
+    tf.debugging.check_numerics(proj_x, "nan after proj_x QActivation")
+
 
     proj_y = QDense(
         hidden_dimy,
@@ -69,9 +77,14 @@ def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
         kernel_regularizer=tf.keras.regularizers.L1L2(0.01),
         activity_regularizer=tf.keras.regularizers.L2(0.01),
     )(proj_y)
+    tf.debugging.check_numerics(proj_y, "nan after proj_y QDense")
     proj_y = QActivation("quantized_relu(bits=13, integer=5)(x)")(proj_y)
+    tf.debugging.check_numerics(proj_y, "nan after proj_y QActivation")
+
 
     enc_out = Concatenate(axis=1)([proj_x, proj_y])
+    tf.debugging.check_numerics(enc_out, "nan after Concatenate")
+
 
     enc_out = QDense(
         hidden,
@@ -80,8 +93,10 @@ def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
         kernel_regularizer=tf.keras.regularizers.L1L2(0.01),
         activity_regularizer=tf.keras.regularizers.L2(0.01),
     )(enc_out)
+    tf.debugging.check_numerics(enc_out, "nan after enc_out QDense")
 
     enc_out = QActivation("quantized_tanh(8, 0, 1)")(enc_out)
+    tf.debugging.check_numerics(enc_out, "nan after enc_out QActivation")
     return enc_out
 
 def CreateModel(shape, output=8):
