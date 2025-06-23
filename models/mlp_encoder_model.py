@@ -60,7 +60,7 @@ def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
         kernel_regularizer=tf.keras.regularizers.L1L2(0.01),
         activity_regularizer=tf.keras.regularizers.L2(0.01),
     )(proj_x)
-    proj_x = QActivation("quantized_relu(bits=13, integer=5)(x)")(var)
+    proj_x = QActivation("quantized_relu(bits=13, integer=5)(x)")(proj_x)
 
     proj_y = QDense(
         hidden_dimy,
@@ -69,20 +69,20 @@ def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
         kernel_regularizer=tf.keras.regularizers.L1L2(0.01),
         activity_regularizer=tf.keras.regularizers.L2(0.01),
     )(proj_y)
-    proj_y = QActivation("quantized_relu(bits=13, integer=5)(x)")(var)
+    proj_y = QActivation("quantized_relu(bits=13, integer=5)(x)")(proj_y)
 
-    var = Concatenate(axis=1)([proj_x, proj_y])
+    enc_out = Concatenate(axis=1)([proj_x, proj_y])
 
-    var = QDense(
+    enc_out = QDense(
         hidden,
         kernel_quantizer=quantized_bits(8, 0, alpha=1),
         bias_quantizer=quantized_bits(8, 0, alpha=1),
         kernel_regularizer=tf.keras.regularizers.L1L2(0.01),
         activity_regularizer=tf.keras.regularizers.L2(0.01),
-    )(var)
+    )(enc_out)
 
-    var = QActivation("quantized_tanh(8, 0, 1)")(var)
-    return var
+    enc_out = QActivation("quantized_tanh(8, 0, 1)")(enc_out)
+    return enc_out
 
 def CreateModel(shape, output=8):
     hidden = 16
