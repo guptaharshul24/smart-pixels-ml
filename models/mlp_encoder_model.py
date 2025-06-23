@@ -43,7 +43,7 @@ def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
         padding="valid", 
         data_format=None,        
     )(var)
-    proj_x = Flatten()(proj_x)
+    proj_x = Flatten(name="flatten_x")(proj_x)
 
     proj_y = AveragePooling2D(
         pool_size=(hidden_dimy, 1), 
@@ -51,7 +51,7 @@ def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
         padding="valid", 
         data_format=None,        
     )(var)
-    proj_y = Flatten()(proj_y)
+    proj_y = Flatten(name="flatten_y")(proj_y)
 
     proj_x = QDense(
         hidden_dimx,
