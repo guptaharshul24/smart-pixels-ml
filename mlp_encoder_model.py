@@ -1,4 +1,3 @@
-import keras
 from keras.layers import *
 from keras.models import Sequential, Model
 from keras.utils import Sequence
@@ -39,7 +38,7 @@ def var_network(var, hidden=10, output=2):
 
 def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
     proj_x = AveragePooling2D(
-        pool_size=(1, 21), 
+        pool_size=(1, hidden_dimx), 
         strides=None, 
         padding="valid", 
         data_format=None,        
@@ -47,7 +46,7 @@ def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
     proj_x = Flatten()(proj_x)
 
     proj_y = AveragePooling2D(
-        pool_size=(13, 1), 
+        pool_size=(hidden_dimy, 1), 
         strides=None, 
         padding="valid", 
         data_format=None,        
@@ -86,8 +85,10 @@ def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
     return var
 
 def CreateModel(shape):
+    hidden = 16
+    hidden_dimx=shape[0], hidden_dimy=shape[1]
     x_base = x_in = Input(shape, name="input_pxls/")
-    stack = mlp_encoder_network(x_base)
+    stack = mlp_encoder_network(x_base, hidden, hidden_dimx, hidden_dimy,)
     stack = var_network(stack, hidden=16, output=3) # this network should only be used with 'slim' (3) or 'diagonal' (8) regression targets
     model = Model(inputs=x_in, outputs=stack, name="smrtpxl_regression")
     return model
