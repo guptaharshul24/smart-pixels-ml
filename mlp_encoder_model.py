@@ -84,11 +84,12 @@ def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
     var = QActivation("quantized_tanh(8, 0, 1)")(var)
     return var
 
-def CreateModel(shape):
+def CreateModel(shape, output=8):
     hidden = 16
-    hidden_dimx=shape[0], hidden_dimy=shape[1]
+    hidden_dimx=shape[0]
+    hidden_dimy=shape[1]
     x_base = x_in = Input(shape, name="input_pxls/")
     stack = mlp_encoder_network(x_base, hidden, hidden_dimx, hidden_dimy,)
-    stack = var_network(stack, hidden=16, output=3) # this network should only be used with 'slim' (3) or 'diagonal' (8) regression targets
+    stack = var_network(stack, hidden=16, output=output) # this network should only be used with 'slim' (3) or 'diagonal' (8) regression targets
     model = Model(inputs=x_in, outputs=stack, name="smrtpxl_regression")
     return model
