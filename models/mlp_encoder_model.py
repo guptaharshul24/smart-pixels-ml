@@ -33,13 +33,16 @@ def var_network(var, hidden=10, output=2):
     #var = keras.activations.tanh(var)
     var = QActivation("quantized_tanh(8, 0, 1)", name="activation_tanh_3")(var)
     tf.debugging.check_numerics(var, "nan after activation_tanh_3")
-    return QDense(
+    
+    var = QDense(
         output,
         kernel_quantizer=quantized_bits(8, 0, alpha=1),
         bias_quantizer=quantized_bits(8, 0, alpha=1),
         kernel_regularizer=tf.keras.regularizers.L1L2(0.01),
         name="dense_3"
     )(var)
+    tf.debugging.check_numerics(var, "nan after dense_3")
+    return var
 
 def mlp_encoder_network(var, hidden=16, hidden_dimx=16, hidden_dimy=16):
     proj_x = AveragePooling2D(
