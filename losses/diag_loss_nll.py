@@ -2,9 +2,13 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 
 # custom loss function foo diag model (with 8 outputs)
-def custom_diag_loss(y, p_base, minval=1e-9, maxval=1e9, scale = 512):
+def custom_diag_loss(y, p_base, ):
     mu = p_base[:, 0:4]
     raw_diag = p_base[:, 4:8]
+    
+    minval=1e-9
+    maxval=1e9
+    scale = 512
     
     # creating each matrix element in 4x4
     Mdia = minval + tf.math.maximum(raw_diag, 0.0)
