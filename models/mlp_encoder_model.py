@@ -8,6 +8,7 @@ from tensorflow.keras import datasets, layers, models
 
 def var_network(var, hidden=10, output=2):
     var = Flatten(name="flatten")(var)
+    tf.debugging.check_numerics(var, "nan after flatten")
     var = QDense(
         hidden,
         kernel_quantizer=quantized_bits(8, 0, alpha=1),
@@ -16,8 +17,10 @@ def var_network(var, hidden=10, output=2):
         activity_regularizer=tf.keras.regularizers.L2(0.01),
         name="dense_1"
     )(var)
+    tf.debugging.check_numerics(var, "nan after dense_1")
     #var = keras.activations.tanh(var)
     var = QActivation("quantized_tanh(8, 0, 1)", name="activation_tanh_2")(var)
+    tf.debugging.check_numerics(var, "nan after activation_tanh_2")
     var = QDense(
         hidden,
         kernel_quantizer=quantized_bits(8, 0, alpha=1),
@@ -26,8 +29,10 @@ def var_network(var, hidden=10, output=2):
         activity_regularizer=tf.keras.regularizers.L2(0.01),
         name="dense_2"
     )(var)
+    tf.debugging.check_numerics(var, "nan after dense_2")
     #var = keras.activations.tanh(var)
     var = QActivation("quantized_tanh(8, 0, 1)", name="activation_tanh_3")(var)
+    tf.debugging.check_numerics(var, "nan after activation_tanh_3")
     return QDense(
         output,
         kernel_quantizer=quantized_bits(8, 0, alpha=1),
