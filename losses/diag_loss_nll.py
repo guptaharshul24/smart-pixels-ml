@@ -11,7 +11,8 @@ def custom_diag_loss(y, p_base, ):
     scale = 512
     
     # creating each matrix element in 4x4
-    Mdia = minval + tf.math.maximum(raw_diag, 0.0)
+    Mdia = tf.maximum(minval + tf.math.maximum(raw_diag, 0.0), maxval)
+    
     
     # placeholder zero element
     zeros = tf.zeros_like(Mdia[:,0])
@@ -30,4 +31,4 @@ def custom_diag_loss(y, p_base, ):
     ) 
     NLL = -dist.log_prob(y)
 
-    return tf.reduce_sum(NLL) 
+    return tf.reduce_mean(NLL) 
