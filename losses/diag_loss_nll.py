@@ -8,12 +8,12 @@ def custom_diag_loss(y, p_base, ):
     minval=1e-9
     maxval=1e9
     
-    log_sigma   = p_base[:, 4:8]
-    sigma_diag  = tf.nn.softplus(log_sigma) + 1e-6
+    raw_diag = p_base[:, 4:8]
+    Mdia  = tf.nn.softplus(raw_diag) + minval
     
     dist = tfp.distributions.MultivariateNormalDiag(
         loc=mu,
-        scale_diag=sigma_diag
+        scale_diag=Mdia
     )
     NLL = -dist.log_prob(y)
 
