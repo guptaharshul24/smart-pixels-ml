@@ -31,4 +31,4 @@ def custom_diag_loss(y, p_base, ):
     ) 
     NLL = -dist.log_prob(y)
 
-    return tf.reduce_mean(NLL) 
+    return tf.reduce_sum(NLL) 
