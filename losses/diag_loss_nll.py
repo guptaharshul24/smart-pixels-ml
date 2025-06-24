@@ -8,7 +8,8 @@ def custom_diag_loss(y, p_base, ):
     minval=1e-9
     maxval=1e9
     
-    sigma_diag = tf.clip_by_value(p_base[:, 4:8], minval, maxval)
+    log_sigma   = p_base[:, 4:8]
+    sigma_diag  = tf.nn.softplus(log_sigma) + 1e-6
     
     dist = tfp.distributions.MultivariateNormalDiag(
         loc=mu,
