@@ -122,3 +122,52 @@ class AnnealingScheduler(tf.keras.callbacks.Callback):
 
     def _step_schedule(self, epoch, total_epochs, initial_k=1.0, step_size=5, gamma=2.0):
         return initial_k * (gamma ** tf.floor(tf.cast(epoch, tf.float32) / step_size))
+
+
+if __name__ == '__main__':
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    x_input = tf.constant(np.linspace(-1.5, 1.5, 500), dtype=tf.float32)
+
+
+    k_low = 2.0
+    k_high = 50.0
+    k_very_high = 500.0
+    layer_low_k = SoftQuantizeLayer(
+        levels=(-1.0, -0.5, 0.0, 0.5),
+        initial_k=k_low
+    )
+    layer_high_k = SoftQuantizeLayer(
+        levels=(-1.0, -0.5, 0.0, 0.5),
+        initial_k=k_high
+    )
+    layer_very_high_k = SoftQuantizeLayer(
+        levels=(-1.0, -0.5, 0.0, 0.5),
+        initial_k=k_very_high
+    )
+    
+
+    y_soft_low_k = layer_low_k(x_input, training=True)    # Low 'k' (smooth quantization for early training)
+    y_soft_high_k = layer_high_k(x_input, training=True)  # High 'k' (sharp quantization for mid training)
+    y_soft_very_high_k = layer_very_high_k(x_input, training=True) # Very high 'k' (sharp quantization for late training)
+    y_hard = layer_high_k(x_input, training=False)        # Hard quantization (inference mode)
+
+    
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    ax.plot(x_input, x_input, 'k--', alpha=0.4, label='Identity ($y=x$)')
+    ax.plot(x_input, y_hard, color='red', linewidth=3.5, label=f'Hard Quantize (Inference)')
+    ax.plot(x_input, y_soft_low_k, 'b-', linewidth=2.5, label=f'Soft Quantize (Early Training, $k={k_low}$)')
+    ax.plot(x_input, y_soft_high_k, 'c-', linewidth=2.5, label=f'Soft Quantize (Mid Training, $k={k_high}$)')
+    ax.plot(x_input, y_soft_very_high_k, 'black', linestyle='-.', linewidth=2.5, label=f'Soft Quantize (Late Training, $k={k_very_high}$)')
+
+    ax.set_title("SoftQuantizeLayer Behavior Verification", fontsize=16)
+    ax.set_xlabel("Input Value", fontsize=12)
+    ax.set_ylabel("Output Value", fontsize=12)
+    ax.legend(fontsize=11)
+    ax.grid(True)
+    ax.set_xlim(-1.5, 1.5)
+    ax.set_ylim(-1.5, 1.5)
+
+    plt.show()
