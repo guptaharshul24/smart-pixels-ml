@@ -3,7 +3,7 @@
 # @Author: Arghya Ranjan Das
 
 import tensorflow as tf
-
+import math
 
 class SoftQuantizeLayer(tf.keras.layers.Layer):
     def __init__(self,
@@ -22,7 +22,7 @@ class SoftQuantizeLayer(tf.keras.layers.Layer):
         # if k is trainable log_k is good variable to use
         self.log_k = self.add_weight(
             name='log_k',
-            initializer=tf.constant_initializer(tf.math.log(self.initial_k)),
+            initializer=tf.constant_initializer(math.log(self.initial_k)),
             trainable=self.trainable_k,
             dtype=tf.float32
         )
