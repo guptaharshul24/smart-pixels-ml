@@ -1,0 +1,37 @@
+# Ignore trained models
+trained_models/
+
+# Ignore Python bytecode
+__pycache__/
+*.py[cod]
+*.so
+
+# Ignore Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore logs and debug output
+*.log
+*.tmp
+
+# Ignore data and cache files
+*.npy
+*.npz
+*.pkl
+*.h5
+*.hdf5
+*.ckpt
+*.pt
+*.onnx
+
+# Ignore editor/system files
+*.swp
+*.swo
+*.DS_Store
+*.vscode/
+*.idea/
+
+# Ignore virtual environments
+venv/
+.env/
+.envrc
+.venv/
