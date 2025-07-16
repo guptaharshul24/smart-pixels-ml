@@ -30,10 +30,11 @@ class SoftQuantizeLayer(tf.keras.layers.Layer):
         super(SoftQuantizeLayer, self).build(input_shape)
 
     def call(self, inputs, training=None):
+        hard_q = self._hard_quantize(inputs)
         if training:
-            return self._soft_quantize(inputs)
-        y = self._hard_quantize(inputs)
-        return tf.stop_gradient(y)
+            soft_q = self._soft_quantize(inputs)
+            return tf.stop_gradient(hard_q - soft_q) + soft_q # Straight-Through Estimator
+        return tf.stop_gradient(hard_q) 
 
     def _soft_quantize(self, x):
         """Applies the soft quantization formula."""
