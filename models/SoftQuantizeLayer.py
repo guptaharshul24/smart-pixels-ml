@@ -8,17 +8,24 @@ import math
 class SoftQuantizeLayer(tf.keras.layers.Layer):
     def __init__(self,
                  levels=(-1.0, -0.5, 0.0, 0.5),
+                 trainable_levels=True,
                  initial_k=1.0,
                  trainable_k=False,
                  **kwargs):
         super(SoftQuantizeLayer, self).__init__(**kwargs)
         self.levels_tuple = levels
+        self.num_levels = 
         self.initial_k = initial_k
         self.trainable_k = trainable_k
 
     def build(self, input_shape):
-        self.levels = tf.constant(self.levels_tuple, dtype=tf.float32)
-
+        self.levels = self.add_weight(
+            name='quant_levels',
+            shape=(len(self.initial_levels),),
+            initializer=tf.constant_initializer(self.initial_levels),
+            trainable=self.trainable_levels
+        )
+        
         # if k is trainable log_k is good variable to use
         self.log_k = self.add_weight(
             name='log_k',
@@ -33,7 +40,8 @@ class SoftQuantizeLayer(tf.keras.layers.Layer):
         hard_q = self._hard_quantize(inputs)
         if training:
             soft_q = self._soft_quantize(inputs)
-            return tf.stop_gradient(hard_q - soft_q) + soft_q # Straight-Through Estimator
+            # Straight-Through Estimator
+            return tf.stop_gradient(hard_q - soft_q) + soft_q 
         return tf.stop_gradient(hard_q) 
 
     def _soft_quantize(self, x):
