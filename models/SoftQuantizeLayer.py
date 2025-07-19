@@ -8,6 +8,7 @@ import math
 class SoftQuantizeLayer(tf.keras.layers.Layer):
     def __init__(self,
                  initial_levels=(-1.0, -0.5, 0.0, 0.5),
+                 max_delta = 2.0,
                  trainable_levels=True,
                  initial_k=1.0,
                  trainable_k=False,
@@ -18,6 +19,7 @@ class SoftQuantizeLayer(tf.keras.layers.Layer):
         self.initial_k = initial_k
         self.trainable_levels = trainable_levels
         self.trainable_k = trainable_k
+        self.max_delta = max_delta
 
     def build(self, input_shape):
         self.level_0 = self.add_weight(
@@ -28,12 +30,13 @@ class SoftQuantizeLayer(tf.keras.layers.Layer):
         )
         
         initial_deltas = [self.initial_levels[i] - self.initial_levels[i-1] for i in range(1, self.num_levels)]
+        initial_log_deltas = [math.log(d / (self.max_delta - d)) for d in initial_deltas]
 
         
         self.log_deltas= self.add_weight(
             name='log_deltas',
             shape=(self.num_levels - 1,),
-            initializer=tf.constant_initializer([math.log(d) for d in initial_deltas]),
+            initializer=tf.constant_initializer(initial_log_deltas),
             trainable=self.trainable_levels
         )
         
@@ -48,7 +51,7 @@ class SoftQuantizeLayer(tf.keras.layers.Layer):
 
     @property
     def levels(self):
-        deltas = tf.exp(self.log_deltas)
+        deltas = self.max_delta * tf.sigmoid(self.log_deltas)
         cumulative_deltas = tf.cumsum(deltas)
         all_levels = tf.concat(
             [
