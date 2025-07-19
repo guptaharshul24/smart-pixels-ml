@@ -3,208 +3,232 @@
 # @Author: Arghya Ranjan Das
 
 import tensorflow as tf
+import numpy as np
 import math
 
 class SoftQuantizeLayer(tf.keras.layers.Layer):
+    """
+    A soft quantization layer with fully trainable, non-uniform levels and bins.
+    """
     def __init__(self,
-                 initial_levels=(-1.0, -0.5, 0.0, 0.5),
-                 max_delta = 2.0,
+                 n_bits=2,
+                 initial_range=[-1.0, 1.0],
                  trainable_levels=True,
+                 trainable_bins=True,
                  initial_k=1.0,
                  trainable_k=False,
                  **kwargs):
         super(SoftQuantizeLayer, self).__init__(**kwargs)
-        self.initial_levels = initial_levels
-        self.num_levels = len(self.initial_levels)
-        self.initial_k = initial_k
+        assert isinstance(n_bits, int) and n_bits > 0, "'n_bits' must be a positive integer."
+        
+        self.n_bits = n_bits
+        self.num_levels = 2 ** self.n_bits
+        self.initial_range = initial_range
         self.trainable_levels = trainable_levels
+        self.trainable_bins = trainable_bins
+        self.initial_k = initial_k
         self.trainable_k = trainable_k
-        self.max_delta = max_delta
 
     def build(self, input_shape):
-        self.level_0 = self.add_weight(
-            name='level_0',
-            shape=(1,),
-            initializer=tf.constant_initializer(self.initial_levels[0]), 
-            trainable=True
-        )
-        
-        initial_deltas = [self.initial_levels[i] - self.initial_levels[i-1] for i in range(1, self.num_levels)]
-        initial_log_deltas = [math.log(d / (self.max_delta - d)) for d in initial_deltas]
+        initial_points = tf.linspace(self.initial_range[0], 
+                                     self.initial_range[1], 
+                                     self.num_levels)
+        initial_first_point = initial_points[0]
+        initial_deltas = np.diff(initial_points.numpy())
 
-        
-        self.log_deltas= self.add_weight(
-            name='log_deltas',
-            shape=(self.num_levels - 1,),
-            initializer=tf.constant_initializer(initial_log_deltas),
+        # --- (Y-axis) ---
+        self.first_level = self.add_weight(
+            name='first_level',
+            shape=(1,),
+            initializer=tf.constant_initializer(initial_first_point.numpy()),
             trainable=self.trainable_levels
         )
+        self.log_level_deltas = self.add_weight(
+            name='log_level_deltas',
+            shape=(self.num_levels - 1,),
+            initializer=tf.constant_initializer(np.log(initial_deltas)),
+            trainable=self.trainable_levels
+        )
+
+        # --- (X-axis) ---
+        self.first_bin_center = self.add_weight(
+            name='first_bin_center',
+            shape=(1,),
+            initializer=tf.constant_initializer(initial_first_point.numpy()),
+            trainable=self.trainable_bins
+        )
+        self.log_bin_deltas = self.add_weight(
+            name='log_bin_deltas',
+            shape=(self.num_levels - 1,),
+            initializer=tf.constant_initializer(np.log(initial_deltas)),
+            trainable=self.trainable_bins
+        )
         
-        # if k is trainable log_k is good variable to use
+        # --- parameter 'k' ---
         self.log_k = self.add_weight(
             name='log_k',
+            shape=(1,),
             initializer=tf.constant_initializer(math.log(self.initial_k)),
-            trainable=self.trainable_k,
-            dtype=tf.float32
+            trainable=self.trainable_k
         )
         super(SoftQuantizeLayer, self).build(input_shape)
 
     @property
     def levels(self):
-        deltas = self.max_delta * tf.sigmoid(self.log_deltas)
+        """Calculates the trainable, non-uniform output levels."""
+        deltas = tf.exp(self.log_level_deltas)
         cumulative_deltas = tf.cumsum(deltas)
-        all_levels = tf.concat(
-            [
-                self.level_0, 
-                self.level_0 + cumulative_deltas
-                ], 
-            axis=0
-            )
-        return all_levels
-    
+        return tf.concat([self.first_level, 
+                          self.first_level + cumulative_deltas], 
+                         axis=0
+                        )
+
+    @property
+    def bin_centers(self):
+        """Calculates the trainable, non-uniform bin centers."""
+        deltas = tf.exp(self.log_bin_deltas)
+        cumulative_deltas = tf.cumsum(deltas)
+        return tf.concat([self.first_bin_center, 
+                          self.first_bin_center + cumulative_deltas], 
+                         axis=0
+                         )
+
     @property
     def k(self):
         return tf.exp(self.log_k)
     
     def call(self, inputs, training=None):
-        current_levels = self.levels
-        hard_q = self._hard_quantize(inputs, current_levels)
+        q_levels = self.levels
+        q_bins = self.bin_centers
+        hard_q = self._hard_quantize(inputs, q_levels, q_bins)
+        
         if training:
-            soft_q = self._soft_quantize(inputs, current_levels)
-            # Straight-Through Estimator
-            return tf.stop_gradient(hard_q - soft_q) + soft_q 
+            soft_q = self._soft_quantize(inputs, q_levels, q_bins)
+            return tf.stop_gradient(hard_q - soft_q) + soft_q
         return tf.stop_gradient(hard_q) 
 
-    def _soft_quantize(self, x, levels):
-        """Applies the soft quantization formula."""
+    def _soft_quantize(self, x, levels, bin_centers):
         x_reshaped = tf.expand_dims(x, axis=-1)
-        levels_reshaped = tf.reshape(levels, (1,) * len(x.shape) + (-1,))
-
-        dist = tf.square(x_reshaped - levels_reshaped)
+        dist = tf.square(x_reshaped - bin_centers)
         exp_term = tf.exp(-self.k * dist)
         weights = exp_term / tf.reduce_sum(exp_term, axis=-1, keepdims=True)
-
         return tf.reduce_sum(weights * levels, axis=-1)
 
-    def _hard_quantize(self, x, levels):
-        """Finds the closest quantization level for each input value."""
+    def _hard_quantize(self, x, levels, bin_centers):
         x_reshaped = tf.expand_dims(x, axis=-1)
-        abs_diff = tf.abs(x_reshaped - levels)
+        abs_diff = tf.abs(x_reshaped - bin_centers)
         indices = tf.argmin(abs_diff, axis=-1)
-
         return tf.gather(levels, indices)
 
     def get_config(self):
         config = super(SoftQuantizeLayer, self).get_config()
         config.update({
-            'initial_levels': self.initial_levels,
-            'initial_k': self.initial_k,
+            'n_bits': self.n_bits,
+            'initial_range': self.initial_range,
             'trainable_levels': self.trainable_levels,
+            'trainable_bins': self.trainable_bins,
+            'initial_k': self.initial_k,
             'trainable_k': self.trainable_k
         })
         return config
     
-    
-class AnnealingScheduler(tf.keras.callbacks.Callback):
-    def __init__(self, schedule, target_layer_name, verbose=0, **kwargs):
-        super(AnnealingScheduler, self).__init__()
-        self.schedule_params = kwargs
-        self.target_layer_name = target_layer_name
-        self.verbose = verbose
-        self._pi = tf.constant(3.14159265358979, dtype=tf.float32)
-        self._set_schedule_function(schedule)
-
-    def _set_schedule_function(self, schedule):
-        """Selects the schedule function based on the input string."""
-        schedule_map = {
-            'linear': self._linear_schedule,
-            'cosine': self._cosine_schedule,
-            'exponential': self._exponential_schedule,
-            'step': self._step_schedule,
-        }
-        if callable(schedule):
-            self.schedule_fn = schedule
-        elif schedule in schedule_map:
-            self.schedule_fn = schedule_map[schedule]
-        else:
-            raise ValueError(f"Unknown schedule: '{schedule}'. Supported: {list(schedule_map.keys())}")
-
-    def on_train_begin(self, logs=None):
-        try:
-            self.layer = self.model.get_layer(self.target_layer_name)
-            if not isinstance(self.layer, SoftQuantizeLayer):
-                raise TypeError("Target layer must be a SoftQuantizeLayer.")
-        except ValueError:
-            raise ValueError(f"Layer '{self.target_layer_name}' not found in model.")
-        
-        self.schedule_params['total_epochs'] = self.params['epochs']
-
-    def on_epoch_begin(self, epoch, logs=None):
-        """Called at the beginning of an epoch to update k."""
-        new_k = self.schedule_fn(epoch, **self.schedule_params)
-        self.layer.log_k.assign(tf.math.log(tf.cast(new_k, tf.float32)))
-
-        current_levels = self.layer.levels.numpy()
-        levels_str = ", ".join([f"{level:.4f}" for level in current_levels])
-
-        if self.verbose > 0:
-            print(f"\nEpoch {epoch + 1}: Annealing 'k' set to {new_k:.4f}")
-            print(f"\tLevels: {levels_str}")
-
-    def _linear_schedule(self, epoch, total_epochs, initial_k=1.0, final_k=50.0):
-        rate = tf.cast(epoch, tf.float32) / tf.cast(total_epochs, tf.float32)
-        return initial_k + (final_k - initial_k) * rate
-
-    def _cosine_schedule(self, epoch, total_epochs, initial_k=1.0, final_k=50.0):
-        pi = self._pi
-        rate = 0.5 * (1.0 - tf.cos(pi * tf.cast(epoch, tf.float32) / tf.cast(total_epochs, tf.float32)))
-        return initial_k + (final_k - initial_k) * rate
-
-    def _exponential_schedule(self, epoch, total_epochs, initial_k=1.0, final_k=50.0):
-        rate = tf.cast(epoch, tf.float32) / tf.cast(total_epochs, tf.float32)
-        return initial_k * (final_k / initial_k) ** rate
-
-    def _step_schedule(self, epoch, total_epochs, initial_k=1.0, step_size=5, gamma=2.0):
-        return initial_k * (gamma ** tf.floor(tf.cast(epoch, tf.float32) / step_size))
-
-
+   
+   
 if __name__ == '__main__':
-    import numpy as np
     import matplotlib.pyplot as plt
+    from matplotlib.widgets import Slider
 
-    layer = SoftQuantizeLayer(initial_levels=(-1.0, -0.5, 0.0, 0.5))
+    n_bits = 2 
+    num_levels = 2**n_bits
+    initial_k_val = 20.0
+
+    layer = SoftQuantizeLayer(n_bits=n_bits, initial_k=initial_k_val)
     x_input = tf.constant(np.linspace(-1.5, 1.5, 500), dtype=tf.float32)
     layer.build(input_shape=x_input.shape)
 
-    k_low = 2.0
-    k_high = 25.0
-    k_very_high = 500.0
+    initial_first_level = layer.first_level.numpy()[0]
+    initial_level_deltas = tf.exp(layer.log_level_deltas).numpy()
+    initial_first_bin = layer.first_bin_center.numpy()[0]
+    initial_bin_deltas = tf.exp(layer.log_bin_deltas).numpy()
 
-    layer.log_k.assign(tf.math.log(k_low))
-    y_soft_low_k = layer._soft_quantize(x_input, layer.levels)
+    fig, ax = plt.subplots(figsize=(10, 9))
+    plt.subplots_adjust(bottom=0.55)
 
-    layer.log_k.assign(tf.math.log(k_high))
-    y_soft_high_k = layer._soft_quantize(x_input, layer.levels)
+    y_hard_initial = layer._hard_quantize(x_input, layer.levels, layer.bin_centers)
+    y_soft_initial = layer._soft_quantize(x_input, layer.levels, layer.bin_centers)
 
-    layer.log_k.assign(tf.math.log(k_very_high))
-    y_soft_very_high_k = layer._soft_quantize(x_input, layer.levels)
-    
-    y_hard = layer(x_input, training=False)
+    line_hard, = ax.plot(x_input, y_hard_initial, 'r-', lw=2.5, 
+                         label='Hard Quantize (Inference)')
+    line_soft, = ax.plot(x_input, y_soft_initial, 'b-', alpha=0.8, 
+                         lw=2.0, label='Soft Quantize (Training Approx.)')
+    bin_markers, = ax.plot(layer.bin_centers.numpy(), layer.levels.numpy(), 'x', 
+                           color='green', mew=3, ms=10, label='Bin Centers (X)')
 
-    fig, ax = plt.subplots(figsize=(10, 7))
-
-    ax.plot(x_input, x_input, 'k--', alpha=0.4, label='Identity ($y=x$)')
-    ax.plot(x_input, y_hard, color='red', linewidth=3.5, label=f'Hard Quantize (Inference)')
-    ax.plot(x_input, y_soft_low_k, 'b-', linewidth=2.5, label=f'Soft Quantize (Early Training, $k={k_low}$)')
-    ax.plot(x_input, y_soft_high_k, 'c-', linewidth=2.5, label=f'Soft Quantize (Mid Training, $k={k_high}$)')
-    ax.plot(x_input, y_soft_very_high_k, 'black', linestyle='-.', linewidth=2.5, label=f'Soft Quantize (Late Training, $k={k_very_high}$)')
-
-    ax.set_title("SoftQuantizeLayer Behavior Verification", fontsize=16)
-    ax.set_xlabel("Input Value", fontsize=12)
-    ax.set_ylabel("Output Value", fontsize=12)
-    ax.legend(fontsize=11)
+    ax.set_title(f"Interactive {n_bits}-bit Quantizer (Delta Control)", fontsize=16)
+    ax.legend(loc='upper left')
     ax.grid(True)
-    ax.set_xlim(-1.5, 1.5)
-    ax.set_ylim(-1.5, 1.5)
+    ax.set_xlim(-1.5, 1.5); ax.set_ylim(-1.5, 1.5)
+
+    ax_k = fig.add_axes([0.15, 0.45, 0.75, 0.02])
+    k_slider = Slider(ax=ax_k, label='k (Softness)', 
+                      valmin=0.1, valmax=200.0, 
+                      valinit=initial_k_val
+                      )
+    
+    ax.text(0.05, 0.4, 'Level Sliders (Y-axis)', transform=fig.transFigure, fontsize=12)
+    level_slider_axes = [fig.add_axes([0.15, 0.35 - i*0.04, 0.75, 0.02]) for i in range(num_levels)]
+    first_level_slider = Slider(ax=level_slider_axes[0], label='L0 Position', valmin=-1.5, valmax=0.0, valinit=initial_first_level)
+    level_delta_sliders = [Slider(ax=level_slider_axes[i+1], 
+                                  label=f'L Delta {i+1}', 
+                                  valmin=0.01, valmax=1.5, 
+                                  valinit=initial_level_deltas[i]
+                                  ) 
+                           for i in range(num_levels - 1)]
+    
+    ax.text(0.05, 0.18, 'Bin Sliders (X-axis)', transform=fig.transFigure, fontsize=12)
+    bin_slider_axes = [fig.add_axes([0.15, 0.15 - i*0.04, 0.75, 0.02]) for i in range(num_levels)]
+    first_bin_slider = Slider(ax=bin_slider_axes[0], 
+                              label='B0 Position', 
+                              valmin=-1.5, valmax=0.0, 
+                              valinit=initial_first_bin
+                              )
+    bin_delta_sliders = [Slider(ax=bin_slider_axes[i+1], 
+                                label=f'B Delta {i+1}', 
+                                valmin=0.01, valmax=1.5, 
+                                valinit=initial_bin_deltas[i]
+                                ) 
+                         for i in range(num_levels - 1)]
+
+    def update(val):
+        layer.first_level.assign([first_level_slider.val])
+        level_delta_vals = [s.val for s in level_delta_sliders]
+        layer.log_level_deltas.assign(np.log(level_delta_vals))
+
+        layer.first_bin_center.assign([first_bin_slider.val])
+        bin_delta_vals = [s.val for s in bin_delta_sliders]
+        layer.log_bin_deltas.assign(np.log(bin_delta_vals))
+
+        layer.log_k.assign([tf.math.log(k_slider.val)])
+
+        current_levels = layer.levels
+        current_bins = layer.bin_centers
+        
+        y_hard_new = layer._hard_quantize(x_input, current_levels, current_bins)
+        y_soft_new = layer._soft_quantize(x_input, current_levels, current_bins)
+        
+        line_hard.set_ydata(y_hard_new)
+        line_soft.set_ydata(y_soft_new)
+        bin_markers.set_data(current_bins.numpy(), current_levels.numpy())
+
+        fig.canvas.draw_idle()
+
+    k_slider.on_changed(update)
+    first_level_slider.on_changed(update)
+    for s in level_delta_sliders: s.on_changed(update)
+    first_bin_slider.on_changed(update)
+    for s in bin_delta_sliders: s.on_changed(update)
 
     plt.show()
+    
+    
+
