@@ -3,7 +3,7 @@
 # AnnealingScheduler.py
 # @Author: Arghya Ranjan Das
 
-from SoftQuantizeLayer import SoftQuantizeLayer
+from models.SoftQuantizeLayer import SoftQuantizeLayer
 import tensorflow as tf
     
 class AnnealingScheduler(tf.keras.callbacks.Callback):
@@ -43,7 +43,7 @@ class AnnealingScheduler(tf.keras.callbacks.Callback):
     def on_epoch_begin(self, epoch, logs=None):
         """Called at the beginning of an epoch to update k."""
         new_k = self.schedule_fn(epoch, **self.schedule_params)
-        self.layer.log_k.assign(tf.math.log(tf.cast(new_k, tf.float32)))
+        self.layer.log_k.assign([tf.math.log(tf.cast(new_k, tf.float32))])
 
         current_levels = self.layer.levels.numpy()
         levels_str = ", ".join([f"{level:.4f}" for level in current_levels])
