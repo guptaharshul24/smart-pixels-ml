@@ -46,11 +46,14 @@ class AnnealingScheduler(tf.keras.callbacks.Callback):
         self.layer.log_k.assign([tf.math.log(tf.cast(new_k, tf.float32))])
 
         current_levels = self.layer.levels.numpy()
-        levels_str = ", ".join([f"{level:.4f}" for level in current_levels])
+        current_thresholds = self.layer.thresholds.numpy()
 
+        levels_str = ", ".join([f"{level:.4f}" for level in current_levels])
+        thresholds_str = ", ".join([f"{threshold:.4f}" for threshold in current_thresholds])
         if self.verbose > 0:
             print(f"\nEpoch {epoch + 1}: Annealing 'k' set to {new_k:.4f}")
             print(f"\tLevels: {levels_str}")
+            print(f"\tThresholds: {thresholds_str}")
 
     def _linear_schedule(self, epoch, total_epochs, initial_k=1.0, final_k=50.0):
         rate = tf.cast(epoch, tf.float32) / tf.cast(total_epochs, tf.float32)
