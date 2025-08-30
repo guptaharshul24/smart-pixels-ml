@@ -135,9 +135,10 @@ class SoftQuantizeLayer(tf.keras.layers.Layer):
 
     @staticmethod
     def _hard_quantize(x, levels, thresholds):
-        flat_thresholds = tf.reshape(thresholds, [-1])
-        idx = tf.searchsorted(flat_thresholds, x, side='right')  # int32
-        return tf.gather(levels, idx)
+        x_reshaped = tf.expand_dims(x, axis=-1) 
+        is_grt_th = x_reshaped > thresholds 
+        indices = tf.reduce_sum(tf.cast(is_grt_th, dtype=tf.int32), axis=-1) 
+        return tf.gather(levels, indices)
 
     def get_config(self):
         config = super(SoftQuantizeLayer, self).get_config()
