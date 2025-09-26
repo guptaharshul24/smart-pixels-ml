@@ -35,3 +35,9 @@ venv/
 .env/
 .envrc
 .venv/
+*.csv
+
+# Ignore run logs
+runLOG*.txt
+*.out
+*.err

@@ -142,7 +142,7 @@ dataset_base_dir = "/depot/cms/users/das214/datasets/dataset_3sr/dataset_3sr_16x
 logging.info(f"Dataset base directory: {dataset_base_dir}")
 
 NOISE_MU = 0.0
-NOISE_SIGMA = 400.0 # e-
+NOISE_SIGMA = 80.0 # e-
 logging.info(f"Noise parameters: MU={NOISE_MU}, SIGMA={NOISE_SIGMA} e-")
 
 tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files", f"2t_N_{NOISE_MU}mu_{NOISE_SIGMA}sig")
@@ -264,7 +264,7 @@ def main(seed):
     logging.info("Training generator created.")
 
     os.makedirs("trained_models", exist_ok=True)
-    base_dir = f'/home/das214/work/users/das214/SmartPixels/SoftQuantize/trained_models/Transformer_model-{fingerprint}-checkpoints'
+    base_dir = f'/home/das214/work/users/das214/SmartPixels/SoftQuantize/trained_models/2t_N_{NOISE_MU}mu_{NOISE_SIGMA}sig/Transformer_model-{fingerprint}-checkpoints'
     logging.info(f"Base output directory: {base_dir}")
     checkpoints_dir = os.path.join(base_dir, 'checkpoints')
     os.makedirs(checkpoints_dir, exist_ok=True)
