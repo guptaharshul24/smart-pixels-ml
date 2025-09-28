@@ -110,6 +110,8 @@ def create_vit_model(input_shape=(13,21,2),
   q_out = SoftQuantizeLayer(
       n_bits=2,
       initial_range=[-1.0, 1.0],
+      threshold_offset=80,
+      initial_thresholds=[629.6, 1121.1, 2056.3],
       trainable_levels=False,
       trainable_thresholds=True,
       initial_k=1.0,
@@ -145,7 +147,7 @@ NOISE_MU = 0.0
 NOISE_SIGMA = 80.0 # e-
 logging.info(f"Noise parameters: MU={NOISE_MU}, SIGMA={NOISE_SIGMA} e-")
 
-tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files", f"2t_N_{NOISE_MU}mu_{NOISE_SIGMA}sig")
+tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files", f"2t_N_{NOISE_MU}mu_{NOISE_SIGMA}sig_NoLog&Stdr")
 tfrecords_dir_train = os.path.join(tfrecords_base_dir, "TFR_train")
 tfrecords_dir_val   = os.path.join(tfrecords_base_dir, "TFR_val")
 
@@ -264,7 +266,7 @@ def main(seed):
     logging.info("Training generator created.")
 
     os.makedirs("trained_models", exist_ok=True)
-    base_dir = f'/home/das214/work/users/das214/SmartPixels/SoftQuantize/trained_models/2t_N_{NOISE_MU}mu_{NOISE_SIGMA}sig/Transformer_model-{fingerprint}-checkpoints'
+    base_dir = f'/home/das214/work/users/das214/SmartPixels/SoftQuantize/trained_models/2t_N_{NOISE_MU}mu_{NOISE_SIGMA}sig_NoLog&Stdr/Transformer_model-{fingerprint}-checkpoints'
     logging.info(f"Base output directory: {base_dir}")
     checkpoints_dir = os.path.join(base_dir, 'checkpoints')
     os.makedirs(checkpoints_dir, exist_ok=True)
