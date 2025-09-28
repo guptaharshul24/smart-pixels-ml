@@ -47,23 +47,11 @@ class SoftQuantizeLayer(tf.keras.layers.Layer):
     def _softplus(z):
         return tf.nn.softplus(z)
     
-    def _inv_softplus_tf(z, clip_min: Optional[float] = None):
-        z = tf.convert_to_tensor(z)
-        if not z.dtype.is_floating: z = tf.cast(z, tf.float32)
-        if clip_min is not None: z = tf.maximum(z, tf.cast(clip_min, z.dtype))
-
-        if z.dtype in (tf.float16, tf.bfloat16):
-            cutoff = tf.constant(8.0, dtype=z.dtype)
-            z = tf.cast(z, tf.float32)  
-        elif z.dtype == tf.float32:
-            cutoff = tf.constant(20.0, dtype=z.dtype)
-        else:
-            cutoff = tf.constant(40.0, dtype=z.dtype)
-
-        small_branch = tf.math.log(tf.math.expm1(z))
-        large_branch = z + tf.math.log1p(-tf.math.exp(-z))
-        out = tf.where(z > cutoff, large_branch, small_branch)
-        return tf.cast(out, tf.float32)
+    @staticmethod
+    def _inv_softplus(z_positive, z_thr = 20.0):
+        z = tf.convert_to_tensor(z_positive)                
+        z = tf.cast(z, dtype=z.dtype)                           
+        return tf.where(z > z_thr, z, tf.math.log(tf.math.expm1(z)))
     
     def _init_levels(self) -> np.ndarray:
         L = self.num_levels
