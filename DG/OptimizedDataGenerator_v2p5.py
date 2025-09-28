@@ -556,10 +556,10 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
                     abovethresh = recon_values > self.max_threshold
                     recon_values[abovethresh] = 0*recon_values[abovethresh]
                 
-                nonzeros = abs(recon_values) > 0
-                recon_values[nonzeros] = np.sign(recon_values[nonzeros]) * np.log1p(abs(recon_values[nonzeros])) / np.log(2)
-                if self.to_standardize:
-                    recon_values[nonzeros] = self.standardize(recon_values[nonzeros])
+                # nonzeros = abs(recon_values) > 0
+                # recon_values[nonzeros] = np.sign(recon_values[nonzeros]) * np.log1p(abs(recon_values[nonzeros])) / np.log(2)
+                # if self.to_standardize:
+                #     recon_values[nonzeros] = self.standardize(recon_values[nonzeros])
                 recon_values = recon_values.reshape((-1, *self.input_shape))
                 if self.transpose is not None:
                     recon_values = recon_values.transpose(self.transpose)
