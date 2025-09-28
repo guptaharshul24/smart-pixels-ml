@@ -169,48 +169,56 @@ class SoftQuantizeLoggerCallback(tf.keras.callbacks.Callback):
         os.makedirs(os.path.dirname(self.log_filepath), exist_ok=True)
 
     def on_epoch_end(self, epoch, logs=None):
+        # --- find layer safely ---
         try:
             layer = self.model.get_layer(self.layer_name)
-            if not hasattr(layer, 'n_bits'):
-                 logging.warning(f"Layer '{self.layer_name}' is not a SoftQuantizeLayer. Skipping logging.")
-                 return
         except ValueError:
-            logging.warning(f"Layer '{self.layer_name}' not found in the model. Skipping logging.")
+            logging.warning(f"Layer '{self.layer_name}' not found; skipping log.")
+            return
+        if not hasattr(layer, "num_levels"):
+            logging.warning(f"Layer '{self.layer_name}' is not SoftQuantizeLayer; skipping log.")
             return
 
+        # --- gather values (absolute + raw) ---
+        num_levels = layer.num_levels
+        num_thresholds = num_levels - 1
+
+        k_val = float(layer.k.numpy())
+        levels = list(layer.levels.numpy())                  # abs levels: L items
+        thresholds = list(layer.thresholds.numpy())          # abs thresholds: B items
+
+        raw_first_level = float(layer.first_level.numpy())   # raw first-level scalar
+        raw_level_deltas = list(layer.level_deltas_raw.numpy())          # length L-1
+        raw_thr_deltas = list(layer.threshold_deltas_raw.numpy())        # length B
+        raw_first_thr_delta = float(raw_thr_deltas[0]) if raw_thr_deltas else float("nan")
+
+        # --- write header once ---
         if not self.header_written:
-            num_levels = layer.num_levels
-            num_thresholds = num_levels - 1
-            header = ['epoch', 'k']
-            header.extend([f'level_{i}' for i in range(num_levels)])
-            header.extend([f'threshold_{i}' for i in range(num_thresholds)])
-            header.append('raw_first_level')
-            header.extend([f'raw_log_level_delta_{i}' for i in range(num_levels - 1)])
-            header.append('raw_first_threshold')
-            if hasattr(layer, 'log_threshold_deltas'):
-                header.extend([f'raw_log_threshold_delta_{i}' for i in range(num_thresholds - 1)])
-            with open(self.log_filepath, mode='w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(header)
+            header = (
+                ["epoch", "k"] +
+                [f"level_{i}" for i in range(num_levels)] +
+                [f"threshold_{i}" for i in range(num_thresholds)] +
+                ["raw_first_level"] +
+                [f"raw_level_delta_{i}" for i in range(num_levels - 1)] +
+                ["raw_first_threshold_delta"] +
+                [f"raw_threshold_delta_{i+1}" for i in range(num_thresholds - 1)]
+            )
+            with open(self.log_filepath, "w", newline="") as f:
+                csv.writer(f).writerow(header)
             self.header_written = True
-        k_val = layer.k.numpy().item()
-        levels = layer.levels.numpy().tolist()
-        thresholds = layer.thresholds.numpy().tolist()
-        first_level = layer.first_level.numpy().item()
-        log_level_deltas = layer.log_level_deltas.numpy().tolist()
-        first_threshold = layer.first_threshold.numpy().item()
-        row_data = [epoch, k_val]
-        row_data.extend(levels)
-        row_data.extend(thresholds)
-        row_data.append(first_level)
-        row_data.extend(log_level_deltas)
-        row_data.append(first_threshold)
-        if hasattr(layer, 'log_threshold_deltas'):
-            log_threshold_deltas = layer.log_threshold_deltas.numpy().tolist()
-            row_data.extend(log_threshold_deltas)
-        with open(self.log_filepath, mode='a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(row_data)
+
+        # --- row ---
+        row = (
+            [epoch, k_val] +
+            levels +
+            thresholds +
+            [raw_first_level] +
+            raw_level_deltas +
+            [raw_first_thr_delta] +
+            (raw_thr_deltas[1:] if len(raw_thr_deltas) > 1 else [])
+        )
+        with open(self.log_filepath, "a", newline="") as f:
+            csv.writer(f).writerow(row)
 
 def main(seed):
     # Set all random seeds for reproducibility for this specific run
