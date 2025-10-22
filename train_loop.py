@@ -98,6 +98,96 @@ def transformer_encoder(inputs,
   
   return x + res
 
+def sample_thresholds(seed, low, high, num_thresholds):
+    rng = np.random.default_rng(seed)
+    vals = rng.uniform(low=low, high=high, size=num_thresholds)
+    return sorted(vals.tolist())
+
+# CHANGE: Add strict enforcement only for selected variable scopes.
+# REASON: Fail fast if your *target* vars are not matched; don't punish unrelated vars.
+
+class LRMultiplierModel(tf.keras.Model):
+    def __init__(self, *args, lr_multipliers=None,
+                 require_match_substrings=None,  # vars containing any of these substrings MUST match a key
+                 error_on_unmatched_required=True,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lr_multipliers = lr_multipliers or {}
+        self.require_match_substrings = tuple(require_match_substrings or ())
+        self.error_on_unmatched_required = bool(error_on_unmatched_required)
+
+    def _match_key(self, var_name: str):
+        best_key = None
+        for k in self.lr_multipliers:
+            if k in var_name and (best_key is None or len(k) > len(best_key)):
+                best_key = k
+        return best_key
+
+    def _factor_for(self, var_name: str) -> float:
+        key = self._match_key(var_name)
+        if key is None:
+            # If this var belongs to a required scope, error out with context.
+            if any(s in var_name for s in self.require_match_substrings):
+                raise KeyError(
+                    f"[LRMultiplierModel] No LR multiplier matched required variable:\n"
+                    f"  var: {var_name}\n"
+                    f"  required substrings: {self.require_match_substrings}\n"
+                    f"  available keys: {list(self.lr_multipliers.keys())}\n"
+                    f"Hint: check layer names or use a longer/more specific substring."
+                )
+            # For non-required vars, neutral factor.
+            return 1.0
+        return float(self.lr_multipliers[key])
+
+    @staticmethod
+    def _scale_grad(grad, factor: float):
+        if grad is None or factor == 1.0:
+            return grad
+        if isinstance(grad, tf.IndexedSlices):
+            return tf.IndexedSlices(grad.values * factor, grad.indices, grad.dense_shape)
+        return grad * factor
+
+    def train_step(self, data):
+        x, y, sample_weight = tf.keras.utils.unpack_x_y_sample_weight(data)
+        with tf.GradientTape() as tape:
+            y_pred = self(x, training=True)
+            loss = self.compiled_loss(
+                y, y_pred, sample_weight=sample_weight, regularization_losses=self.losses
+            )
+        grads = tape.gradient(loss, self.trainable_variables)
+        scaled_grads = [self._scale_grad(g, self._factor_for(v.name))
+                        for g, v in zip(grads, self.trainable_variables)]
+        self.optimizer.apply_gradients(zip(scaled_grads, self.trainable_variables))
+        self.compiled_metrics.update_state(y, y_pred, sample_weight=sample_weight)
+        return {m.name: m.result() for m in self.metrics} | {"loss": loss}
+
+    def verify_lr_map(self, strict_keys=True):
+        names = [v.name for v in self.trainable_variables]
+        key_hits = {k: 0 for k in self.lr_multipliers}
+        for n in names:
+            for k in self.lr_multipliers:
+                if k in n:
+                    key_hits[k] += 1
+        missing = [k for k, c in key_hits.items() if c == 0]
+        if strict_keys and missing:
+            sample = "\n  - ".join(names[:12])
+            raise KeyError(
+                f"[LRMultiplierModel] LR map keys matched 0 variables: {missing}\n"
+                f"First few variable names for debugging:\n  - {sample}\n"
+                f"Hint: print full names via model.log_lr_multiplier_assignments()."
+            )
+
+    def log_lr_multiplier_assignments(self):
+        print("\n[LRMultiplierModel] Per-variable LR multipliers:")
+        for v in self.trainable_variables:
+            print(f"  {v.name:80s} x{self._factor_for(v.name)}")
+        print()
+
+
+
+
+
+
 def create_vit_model(input_shape=(13,21,2),
                      patch_size=(3,7),
                      embed_dim=64,
@@ -105,13 +195,15 @@ def create_vit_model(input_shape=(13,21,2),
                      ff_dim=128,
                      num_layers=4,
                      dropout=0.1,
-                     final_outputs=14):
+                     final_outputs=14,
+                     initial_thresholds=None,
+                     threshold_offset=80):
   inp = layers.Input(shape=input_shape, name="raw_input")
   q_out = SoftQuantizeLayer(
       n_bits=2,
     #   initial_range=[-1.0, 1.0], # This shoudl be automatically used for the levels
-      threshold_offset=80,
-      initial_thresholds=[629.6, 1121.1, 2056.3],
+      threshold_offset=threshold_offset,
+      initial_thresholds=initial_thresholds,
       trainable_levels=False,
       trainable_thresholds=True,
       initial_k=1.0,
@@ -134,7 +226,19 @@ def create_vit_model(input_shape=(13,21,2),
   x = layers.Flatten()(x)
   x = layers.Dense(64, activation='relu')(x)
   outputs = layers.Dense(final_outputs, activation='linear')(x)
-  model = keras.Model(inputs=inp, outputs=outputs)
+  # model = keras.Model(inputs=inp, outputs=outputs)
+
+  model = LRMultiplierModel(
+        inputs=inp, outputs=outputs,
+        lr_multipliers={
+            "soft_quantizer_output/threshold_deltas_raw": 1e5,
+            # "soft_quantizer_output/level_deltas_raw": 1.0,
+            # "soft_quantizer_output/first_level": 1.0,
+            # "soft_quantizer_output/log_k": 1.0,
+        },
+        require_match_substrings=["soft_quantizer_output/threshold_deltas_raw"],
+        error_on_unmatched_required=True,
+    )
   return model
 
 # %%
@@ -220,6 +324,133 @@ class SoftQuantizeLoggerCallback(tf.keras.callbacks.Callback):
         with open(self.log_filepath, "a", newline="") as f:
             csv.writer(f).writerow(row)
 
+# CHANGE: Group-aware gradient logger with CSV + per-group top-K prints.
+# REASON: Compare quantizer vs selected model weights side-by-side.
+
+class GradientLogger(tf.keras.callbacks.Callback):
+    def __init__(
+        self,
+        sample_source,                # generator / tf.data / callable -> (x, y) / tuple (x, y)
+        log_every=1,
+        max_vars_per_group=6,
+        group_specs=None,            # dict[group_name] = list[str substrings]
+        to_csv=None,
+    ):
+        super().__init__()
+        self.sample_source = sample_source
+        self.log_every = int(log_every)
+        self.max_vars_per_group = int(max_vars_per_group)
+        self.group_specs = group_specs or {}   # e.g., {"quant": ["soft_quantizer_output/"], "attn_qkv": ["multi_head_attention/.*(query|key|value)/kernel"]}
+        self.to_csv = to_csv
+        self._csv_header_written = False
+        if self.to_csv:
+            os.makedirs(os.path.dirname(self.to_csv), exist_ok=True)
+
+    # ---------- helpers ----------
+    def _get_sample(self):
+        # callable -> (x,y)
+        if callable(self.sample_source):
+            out = self.sample_source()
+            if isinstance(out, (tuple, list)) and len(out) >= 2:
+                return out[0], out[1]
+            return out
+
+        # (x,y) tuple
+        if isinstance(self.sample_source, (tuple, list)) and len(self.sample_source) >= 2:
+            return self.sample_source[0], self.sample_source[1]
+
+        # iterable (Sequence/generator/dataset)
+        it = iter(self.sample_source)
+        batch = next(it)
+        if isinstance(batch, (tuple, list)) and len(batch) >= 2:
+            return batch[0], batch[1]
+        return batch
+
+    @staticmethod
+    def _norm(g):
+        if g is None:
+            return None
+        if isinstance(g, tf.IndexedSlices):
+            g = g.values
+        return float(tf.norm(tf.reshape(g, [-1])).numpy())
+
+    def _assign_group(self, var_name: str) -> str:
+        # first matching group wins
+        for gname, patterns in self.group_specs.items():
+            for pat in patterns:
+                if pat in var_name:
+                    return gname
+        return "others"
+
+    # ---------- callback ----------
+    def on_epoch_end(self, epoch, logs=None):
+        if (epoch % self.log_every) != 0:
+            return
+
+        x, y = self._get_sample()
+        with tf.GradientTape() as tape:
+            y_pred = self.model(x, training=True)
+            loss = self.model.compiled_loss(
+                y, y_pred, regularization_losses=self.model.losses
+            )
+        grads = tape.gradient(loss, self.model.trainable_variables)
+
+        # collect rows: (group, name, norm)
+        rows = []
+        for v, g in zip(self.model.trainable_variables, grads):
+            n = self._norm(g)
+            if n is None:
+                continue
+            grp = self._assign_group(v.name)
+            rows.append((grp, v.name, n))
+
+        # print top-K per group
+        by_group = {}
+        for grp, name, n in rows:
+            by_group.setdefault(grp, []).append((name, n))
+        print(f"\n[GradLogger] Epoch {epoch} — per-group top-{self.max_vars_per_group}:")
+        for grp, items in by_group.items():
+            items.sort(key=lambda t: t[1], reverse=True)
+            print(f"  [{grp}]")
+            for name, n in items[:self.max_vars_per_group]:
+                print(f"    {name:80s} | norm={n:.4e}")
+        print("-" * 80)
+
+        # CSV dump
+        if self.to_csv:
+            write_header = (not self._csv_header_written) or (not os.path.exists(self.to_csv))
+            with open(self.to_csv, "a", newline="") as f:
+                w = csv.writer(f)
+                if write_header:
+                    w.writerow(["epoch", "group", "var_name", "grad_norm"])
+                    self._csv_header_written = True
+                for grp, name, n in rows:
+                    w.writerow([epoch, grp, name, f"{n:.6e}"])
+
+
+class AbortOnStuck(tf.keras.callbacks.Callback):
+    """
+    Stop training early if val_loss stays > `threshold` : val_loss_threshold
+    for `patience` consecutive epochs.
+    """
+    def __init__(self, threshold=1e5, patience=3):
+        super().__init__()
+        self.thr = threshold
+        self.pat = patience
+        self.bad = 0
+
+    def on_epoch_end(self, epoch, logs=None):
+        vloss = logs.get("val_loss", np.inf)
+        if vloss > self.thr or not np.isfinite(vloss):
+            self.bad += 1
+            if self.bad >= self.pat:
+                print(f"[AbortOnStuck] val_loss {vloss:.1f} ≥ {self.thr} "
+                      f"for {self.pat} epochs — aborting run.")
+                self.model.stop_training = True
+        else:
+            self.bad = 0
+
+
 def main(seed):
     # Set all random seeds for reproducibility for this specific run
     tf.random.set_seed(seed)
@@ -231,6 +462,13 @@ def main(seed):
     logging.info(f"--- Starting new training run with SEED: {seed} ---")
     logging.info(f"Run Fingerprint: {fingerprint}")
     logging.info(f"Run Timestamp:   {timestamp}")
+
+    num_thresholds = 3
+    threshold_offset = 80.0
+    thr_low, thr_high = threshold_offset, 2000.0
+    random_thresholds = sample_thresholds(seed, thr_low, thr_high, num_thresholds)
+    logging.info(f"Initial thresholds (run-seeded): {random_thresholds}")
+
     
     # --- MODEL CREATION AND COMPILATION (MOVED INSIDE MAIN) ---
     logging.info("Creating Vision Transformer (ViT) model...")
@@ -242,7 +480,9 @@ def main(seed):
         'ff_dim': 128,
         'num_layers': 4,
         'dropout': 0.1,
-        'final_outputs': 14
+        'final_outputs': 14,
+        'initial_thresholds': random_thresholds,
+        'threshold_offset': threshold_offset
     }
     model = create_vit_model(**model_params)
     logging.info(f"Model created with parameters: {model_params}")
@@ -250,9 +490,15 @@ def main(seed):
 
     logging.info("Compiling model...")
     model.compile(
-        optimizer=tf.keras.optimizers.Nadam(learning_rate=1e-3, clipnorm=1.0),
+        # optimizer=tf.keras.optimizers.Nadam(learning_rate=1e-3, clipnorm=1.0),
+        optimizer=tf.keras.optimizers.Nadam(learning_rate=1e-3),
         loss=custom_loss,
     )
+
+    if isinstance(model, LRMultiplierModel):
+        model.verify_lr_map(strict_keys=True)
+        model.log_lr_multiplier_assignments() 
+    
     logging.info("Model compiled with Nadam optimizer and custom_loss.")
     # --- END OF MODEL CREATION BLOCK ---
 
@@ -274,7 +520,7 @@ def main(seed):
     logging.info("Training generator created.")
 
     os.makedirs("trained_models", exist_ok=True)
-    base_dir = f'/home/das214/work/users/das214/SmartPixels/SoftQuantize/trained_models/2t_N_{NOISE_MU}mu_{NOISE_SIGMA}sig_NoLog_Stdr/Transformer_model-{fingerprint}-checkpoints'
+    base_dir = f'/home/das214/work/users/das214/SmartPixels/SoftQuantize/trained_models/2t_N_rnd_thr_{NOISE_MU}mu_{NOISE_SIGMA}sig_NoLog_Stdr_3p0/Transformer_model-{fingerprint}-checkpoints'
     logging.info(f"Base output directory: {base_dir}")
     checkpoints_dir = os.path.join(base_dir, 'checkpoints')
     os.makedirs(checkpoints_dir, exist_ok=True)
@@ -305,7 +551,70 @@ def main(seed):
         layer_name="soft_quantizer_output"
     )
     logging.info(f"SoftQuantizeLayer state will be logged to: {quantizer_log_path}")
-    all_callbacks = [mcp, csv_logger, scheduler_callback, quantizer_logger]
+    abort_bad = AbortOnStuck(threshold=1e5, patience=5)
+    
+    sample_x, sample_y = next(iter(training_generator))
+        
+    group_specs = {
+        # Quantizer internals
+        "quant_thr": [
+            "soft_quantizer_output/threshold_deltas_raw",
+        ],
+        "quant_levels": [
+            "soft_quantizer_output/first_level",
+            "soft_quantizer_output/level_deltas_raw",
+        ],
+        "quant_k": [
+            "soft_quantizer_output/log_k",   # keep only if that var exists in your layer
+        ],
+    
+        # ViT core blocks
+        "pos_embed": [
+            "pos_embedding:0",
+        ],
+        "patch_embed": [
+            "patch_encoder/dense/kernel:0",
+            "patch_encoder/dense/bias:0",
+        ],
+        "attn_qkv": [
+            "multi_head_attention/query/kernel:0",
+            "multi_head_attention/key/kernel:0",
+            "multi_head_attention/value/kernel:0",
+        ],
+        "attn_out": [
+            "multi_head_attention/attention_output/kernel:0",
+            "multi_head_attention/attention_output/bias:0",
+        ],
+        "ln": [
+            "layer_normalization/gamma:0",
+            "layer_normalization/beta:0",
+        ],
+        "mlp": [
+            "dense/kernel:0",     # the FFN dense layers inside transformer block
+            "dense/bias:0",
+            "dense_1/kernel:0",
+            "dense_1/bias:0",
+            "dense_2/kernel:0",
+            "dense_2/bias:0",
+            "dense_3/kernel:0",
+            "dense_3/bias:0",
+            "dense_4/kernel:0",
+            "dense_4/bias:0",
+        ],
+        "head": [
+            "dense_5/kernel:0",   # adjust indices if your naming differs
+            "dense_5/bias:0",
+        ],
+    }
+    
+    gradient_logger = GradientLogger(
+        sample_source=(sample_x, sample_y),     # fixed tiny batch = cheap + reproducible
+        log_every=1,
+        max_vars_per_group=6,
+        group_specs=group_specs,
+    )
+    
+    all_callbacks = [mcp, csv_logger, scheduler_callback, quantizer_logger, abort_bad, gradient_logger]
 
     # --- MODEL TRAINING ---
     logging.info("--- Starting model.fit() ---")
