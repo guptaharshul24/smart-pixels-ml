@@ -53,6 +53,14 @@ class SoftQuantizeLayer(tf.keras.layers.Layer):
         z = tf.cast(z, dtype=z.dtype)                           
         return tf.where(z > z_thr, z, tf.math.log(tf.math.expm1(z)))
     
+    @staticmethod
+    def _expm1(z, z_thr = 20.0):
+        return tf.where(z > z_thr, tf.exp(z), tf.math.expm1(z))
+    
+    @staticmethod
+    def _log1p(z):
+        return tf.math.log1p(z)
+    
     def _init_levels(self) -> np.ndarray:
         L = self.num_levels
         if self.initial_levels is not None:
@@ -75,27 +83,32 @@ class SoftQuantizeLayer(tf.keras.layers.Layer):
             arr = np.linspace(lo, hi, B, dtype=np.float32)
         if not np.all(np.diff(arr) > 0):
             arr = np.sort(arr)
-        return arr  # (B,)
+        return arr  # (B,) = (L-1,)
     
     def build_levels(self):
         initial_levels = self._init_levels()
-        first_level_init = initial_levels[0]
-        deltas_levels_init = np.diff(initial_levels)
         
-        self.first_level = self.add_weight(
-            name='first_level',
-            shape=(1,),
-            initializer=tf.constant_initializer(first_level_init),
-            trainable=self.trainable_levels
-        )
+        if not self.trainable_levels:
+            self.initial_levels = tf.constant(self.initial_levels, dtype=tf.float32)
+        
+        else:
+            first_level_init = initial_levels[0]
+            deltas_levels_init = np.diff(initial_levels)
+            
+            self.first_level = self.add_weight(
+                name='first_level',
+                shape=(1,),
+                initializer=tf.constant_initializer(first_level_init),
+                trainable=self.trainable_levels
+            )
 
-        level_deltas_raw_init = self._inv_softplus(deltas_levels_init).numpy().astype(np.float32)
-        self.level_deltas_raw = self.add_weight(
-            name='level_deltas_raw',
-            shape=(self.num_levels - 1,),
-            initializer=tf.constant_initializer(level_deltas_raw_init),
-            trainable=self.trainable_levels
-        )
+            level_deltas_raw_init = self._log1p(deltas_levels_init).numpy()
+            self.level_deltas_raw = self.add_weight(
+                name='level_deltas_raw',
+                shape=(self.num_levels - 1,),
+                initializer=tf.constant_initializer(level_deltas_raw_init),
+                trainable=self.trainable_levels
+            )
 
 
     def build_thresholds(self):
@@ -107,7 +120,7 @@ class SoftQuantizeLayer(tf.keras.layers.Layer):
 
         assert np.all(deltas_thresholds_init > 0), f"\nInitial thresholds must be strictly increasing. \nGiven threshold_offset: {self.threshold_offset}, initial_thresholds: {initial_thresholds}\n Check if they satisfy: threshold_offset < T0 < T1 < ... < T{B-1}."
             
-        threshold_deltas_raw_init = self._inv_softplus(deltas_thresholds_init).numpy()
+        threshold_deltas_raw_init = self._log1p(deltas_thresholds_init).numpy()
         self.threshold_deltas_raw = self.add_weight(
             name='threshold_deltas_raw',
             shape=(B,), 
@@ -131,40 +144,57 @@ class SoftQuantizeLayer(tf.keras.layers.Layer):
     @property
     def levels(self):
         """Calculates the trainable, non-uniform output levels."""
-        deltas = self._softplus(self.level_deltas_raw)
-        cumulative_deltas = tf.cumsum(deltas)
-        return tf.concat([self.first_level, 
-                          self.first_level + cumulative_deltas], 
-                         axis=0
-                        )
+        if not self.trainable_levels:
+            return tf.constant(self.initial_levels, dtype=tf.float32)
+        
+        else:
+            deltas = self._expm1(self.level_deltas_raw)
+            # deltas = self._softplus(deltas)
+            cumulative_deltas = tf.cumsum(deltas)
+            return tf.concat([self.first_level, 
+                            self.first_level + cumulative_deltas], 
+                            axis=0
+                            )
         
     @property
     def thresholds(self):
-        deltas = self._softplus(self.threshold_deltas_raw)
+        deltas = self._expm1(self.threshold_deltas_raw)
+        deltas = self._softplus(deltas)
         return self.threshold_offset + tf.cumsum(deltas)
 
     @property
     def k(self):
         return tf.exp(self.log_k)
     
+    @property
+    def tau(self):
+        deltas = self._expm1(self.threshold_deltas_raw)
+        dT = self._softplus(deltas)
+        right = tf.concat([dT[1:], dT[-1:]], axis=0)    
+        tau = 0.5 * (dT + right)                        
+        tau = tf.maximum(tau, tf.cast(1e-6, tau.dtype))
+        return tf.stop_gradient(tau)                                      
+    
     def call(self, inputs, training=None):
         q_levels = self.levels
         q_thresholds = self.thresholds
+        q_tau = self.tau
         hard_q = self._hard_quantize(inputs, q_levels, q_thresholds)
         
         if training:
-            soft_q = self._soft_quantize(inputs, self.k, q_levels, q_thresholds)
+            soft_q = self._soft_quantize(inputs, self.k, q_levels, q_thresholds, q_tau)
             return tf.stop_gradient(hard_q - soft_q) + soft_q
         return tf.stop_gradient(hard_q) 
 
     @staticmethod
-    def _soft_quantize(x, k, levels, thresholds):
+    def _soft_quantize(x, k, levels, thresholds, tau):
         """
         Soft bin weights via smoothed CDF differences:
             weights = CDF_i - CDF_{i-1}, where CDF uses sigmoid(k*(t - x)).
         """
         x_exp = tf.expand_dims(x, axis=-1)                # (..., 1)
-        sigs = tf.sigmoid(k * (thresholds - x_exp))       # (..., num_levels-1)
+        # print(tau)
+        sigs = tf.sigmoid(k * (thresholds - x_exp) / tau)       # (..., num_levels-1)
         left = tf.zeros_like(sigs[..., :1])               # (..., 1)
         right = tf.ones_like(sigs[..., :1])               # (..., 1)
         cdf = tf.concat([left, sigs, right], axis=-1)     # (..., B+2)
@@ -200,14 +230,18 @@ if __name__ == '__main__':
     num_levels = 2 ** n_bits
     B = num_levels - 1
     initial_k_val = 50.0
-    threshold_offset_init = -1.2
+    initial_levels = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
+    threshold_offset = 80.0
+    initital_thresholds = np.array([400.0, 800.0, 2000.0], dtype=np.float32)
 
     layer = SoftQuantizeLayer(
         n_bits=n_bits,
         initial_k=initial_k_val,
-        threshold_offset=threshold_offset_init,
+        initial_levels=initial_levels,
+        threshold_offset=threshold_offset,
+        initial_thresholds=initital_thresholds,
     )
-    x_input = tf.constant(np.linspace(-1.5, 1.5, 1000), dtype=tf.float32)
+    x_input = tf.constant(np.linspace(0, 2200, 3000), dtype=tf.float32)
     layer.build(input_shape=x_input.shape)
 
     # Current absolute values
@@ -218,21 +252,21 @@ if __name__ == '__main__':
     plt.subplots_adjust(bottom=0.60)
 
     y_hard_initial = layer._hard_quantize(x_input, layer.levels, layer.thresholds)
-    y_soft_initial = layer._soft_quantize(x_input, layer.k, layer.levels, layer.thresholds)
+    y_soft_initial = layer._soft_quantize(x_input, layer.k, layer.levels, layer.thresholds, layer.tau)
 
     (line_hard,) = ax.plot(x_input, y_hard_initial, 'r-', lw=2.5, label='Hard Quantize (Forward Pass)')
     (line_soft,) = ax.plot(x_input, y_soft_initial, 'b-', alpha=0.8, lw=2.0, label='Soft Quantize (Backprop Approx.)')
 
-    vlines = ax.vlines(layer.thresholds.numpy(), -1.5, 1.5,
+    vlines = ax.vlines(layer.thresholds.numpy(), -0.5, 4.0,
                        colors='g', lw=2, alpha=0.7, linestyles='--', label='Thresholds (T)')
-    ax.vlines(layer.threshold_offset, -1.5, 1.5,
+    ax.vlines(layer.threshold_offset, -0.5, 4.0,
               colors='m', lw=2, alpha=0.7, linestyles='--', label='Threshold Offset (T_off)')
 
     ax.set_title(f"Interactive {n_bits}-bit Soft Quantizer", fontsize=16)
     ax.legend(loc='upper left')
     ax.grid(True)
-    ax.set_xlim(-1.5, 1.5)
-    ax.set_ylim(-1.5, 1.5)
+    ax.set_xlim(0,2200)
+    ax.set_ylim(-0.5, 4.0)
 
    
 
