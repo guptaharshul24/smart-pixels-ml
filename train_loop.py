@@ -202,7 +202,7 @@ def create_vit_model(input_shape=(13,21,2),
   q_out = SoftQuantizeLayer(
       n_bits=2,
     #   initial_range=[-1.0, 1.0], # This shoudl be automatically used for the levels
-      initial_levels=np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
+      initial_levels=np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32),
       threshold_offset=threshold_offset,
       initial_thresholds=initial_thresholds,
       trainable_levels=False,
