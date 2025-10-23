@@ -20,8 +20,9 @@ y_min, y_max = -0.5, 4.0
 initial_k_val = 1.0
 initial_levels = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
 threshold_offset = 80.0
-initital_thresholds = np.array([400.0, 800.0, 1500.0], dtype=np.float32)
+initial_thresholds = np.array([400.0, 800.0, 1500.0], dtype=np.float32)
 
+deriv_scale = 50.0  # Scaling factor for numerical derivative
 
 # --- Layer Initialization ---
 layer = SoftQuantizeLayer(
@@ -29,10 +30,15 @@ layer = SoftQuantizeLayer(
     initial_k=initial_k_val,
     initial_levels=initial_levels,
     threshold_offset=threshold_offset,
-    initial_thresholds=initital_thresholds,
+    initial_thresholds=initial_thresholds,
 )
-x_input = tf.constant(np.linspace(x_min, x_max, 1000), dtype=tf.float32)
+x_input = tf.constant(np.linspace(x_min, x_max, 22000), dtype=tf.float32)
 layer.build(input_shape=x_input.shape)
+
+def numerical_derivative(x, y, scale=deriv_scale):
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    return np.gradient(y, x, edge_order=2) * scale
 
 # --- Plotting Setup ---
 fig, ax = plt.subplots(figsize=(10, 10))
@@ -44,10 +50,14 @@ ax.set_ylim(y_min, y_max)
 
 y_hard_initial = layer._hard_quantize(x_input, layer.levels, layer.thresholds)
 y_soft_initial = layer._soft_quantize(x_input, layer.k, layer.levels, layer.thresholds, layer.tau)
+dy_soft_init = numerical_derivative(x_input.numpy(), y_soft_initial.numpy())
+print(dy_soft_init)
 
 line_hard, = ax.plot(x_input, y_hard_initial, 'r-', lw=2.5, label='Hard Quantize (Inference)')
 line_soft, = ax.plot(x_input, y_soft_initial, 'b-', alpha=0.8, lw=2, label='Soft Quantize (Training)')
-vlines_thresh = ax.vlines(layer.thresholds.numpy(), x_min, x_max, colors='g', lw=2, alpha=0.7, linestyles='--', label='Thresholds (T)')
+line_dsoft, = ax.plot(x_input, dy_soft_init, 'k--', lw=1.5, alpha=0.8, label=f'dy/dx (soft approx) * {deriv_scale}')
+
+vlines_thresh = ax.vlines(layer.thresholds.numpy(), y_min, y_max, colors='g', lw=2, alpha=0.7, linestyles='--', label='Thresholds (T)')
 vline_offset = ax.axvline(layer.threshold_offset, color='purple', lw=2, alpha=0.7, linestyle=':', label='Offset (T_off)')
 ax.legend(loc='upper left')
 
@@ -61,12 +71,14 @@ level_slider_axes = [fig.add_axes([0.15, 0.32 - i*0.03, 0.75, 0.02]) for i in ra
 thresh_slider_axes = [fig.add_axes([0.15, 0.15 - i*0.03, 0.75, 0.02]) for i in range(n_thresh + 1)]
 
 k_slider = Slider(ax=ax_k, label='k (Softness)', valmin=0.1, valmax=200.0, valinit=initial_k_val)
-L0_slider = Slider(ax=level_slider_axes[0], label='L0', valmin=-1.5, valmax=1.0, valinit=initial_L0)
+L0_slider = Slider(ax=level_slider_axes[0], label='L0', valmin=-0.5, valmax=0.5, valinit=initial_L0)
 level_delta_sliders = [Slider(ax=level_slider_axes[i+1], label=f'ΔL{i}', valmin=0.01, valmax=10, valinit=initial_level_deltas[i]) for i in range(n_thresh)]
 T_offset_slider = Slider(ax=thresh_slider_axes[0], label='T_off', valmin=-1.5, valmax=300.0, valinit=threshold_offset)
-thresh_abs_sliders = [Slider(ax=thresh_slider_axes[i+1], label=f'T{i}', valmin=-1.5, valmax=3000, valinit=initial_abs_thresholds[i]) for i in range(n_thresh)]
+thresh_abs_sliders = [Slider(ax=thresh_slider_axes[i+1], label=f'T{i}', valmin=-1.5, valmax=2000, valinit=initial_abs_thresholds[i]) for i in range(n_thresh)]
 
 _slider_update_guard = False
+
+
 
 def update(val):
     global _slider_update_guard, vlines_thresh, vline_offset
@@ -111,6 +123,11 @@ def update(val):
     line_hard.set_ydata(layer._hard_quantize(x_input, current_levels, current_thresholds))
     line_soft.set_ydata(layer._soft_quantize(x_input, layer.k, current_levels, current_thresholds, current_tau))
     
+    # Numerical derivative update
+    y_soft_updated = layer._soft_quantize(x_input, layer.k, current_levels, current_thresholds, current_tau)
+    dy_soft_updated = numerical_derivative(x_input.numpy(), y_soft_updated.numpy())
+    line_dsoft.set_ydata(dy_soft_updated)
+
     vlines_thresh.remove()
     vline_offset.remove()
     vlines_thresh = ax.vlines(current_thresholds.numpy(), x_min, x_max, colors='g', lw=2, alpha=0.7, linestyles='--')
