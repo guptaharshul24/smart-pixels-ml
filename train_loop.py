@@ -196,10 +196,10 @@ class SoftQuantizeLoggerCallback(tf.keras.callbacks.Callback):
         levels = list(layer.levels.numpy())                  # abs levels: L items
         thresholds = list(layer.thresholds.numpy())          # abs thresholds: B items
 
-        raw_first_level = float(layer.first_level.numpy())   # raw first-level scalar
-        raw_level_deltas = list(layer.level_deltas_raw.numpy())          # length L-1
-        raw_thr_deltas = list(layer.threshold_deltas_raw.numpy())        # length B
-        raw_first_thr_delta = float(raw_thr_deltas[0]) if raw_thr_deltas else float("nan")
+        # raw_first_level = float(layer.first_level.numpy())   # raw first-level scalar
+        # raw_level_deltas = list(layer.level_deltas_raw.numpy())          # length L-1
+        # raw_thr_deltas = list(layer.threshold_deltas_raw.numpy())        # length B
+        # raw_first_thr_delta = float(raw_thr_deltas[0]) if raw_thr_deltas else float("nan")
 
         # --- write header once ---
         if not self.header_written:
@@ -207,10 +207,10 @@ class SoftQuantizeLoggerCallback(tf.keras.callbacks.Callback):
                 ["epoch", "k"] +
                 [f"level_{i}" for i in range(num_levels)] +
                 [f"threshold_{i}" for i in range(num_thresholds)] +
-                ["raw_first_level"] +
-                [f"raw_level_delta_{i}" for i in range(num_levels - 1)] +
-                ["raw_first_threshold_delta"] +
-                [f"raw_threshold_delta_{i+1}" for i in range(num_thresholds - 1)]
+                # ["raw_first_level"] +
+                # [f"raw_level_delta_{i}" for i in range(num_levels - 1)] +
+                # ["raw_first_threshold_delta"] +
+                # [f"raw_threshold_delta_{i+1}" for i in range(num_thresholds - 1)]
             )
             with open(self.log_filepath, "w", newline="") as f:
                 csv.writer(f).writerow(header)
@@ -221,10 +221,10 @@ class SoftQuantizeLoggerCallback(tf.keras.callbacks.Callback):
             [epoch, k_val] +
             levels +
             thresholds +
-            [raw_first_level] +
-            raw_level_deltas +
-            [raw_first_thr_delta] +
-            (raw_thr_deltas[1:] if len(raw_thr_deltas) > 1 else [])
+            # [raw_first_level] +
+            # raw_level_deltas +
+            # [raw_first_thr_delta] +
+            # (raw_thr_deltas[1:] if len(raw_thr_deltas) > 1 else [])
         )
         with open(self.log_filepath, "a", newline="") as f:
             csv.writer(f).writerow(row)
