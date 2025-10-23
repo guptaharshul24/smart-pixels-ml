@@ -206,7 +206,7 @@ class SoftQuantizeLoggerCallback(tf.keras.callbacks.Callback):
             header = (
                 ["epoch", "k"] +
                 [f"level_{i}" for i in range(num_levels)] +
-                [f"threshold_{i}" for i in range(num_thresholds)] +
+                [f"threshold_{i}" for i in range(num_thresholds)] # +
                 # ["raw_first_level"] +
                 # [f"raw_level_delta_{i}" for i in range(num_levels - 1)] +
                 # ["raw_first_threshold_delta"] +
