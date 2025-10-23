@@ -220,7 +220,7 @@ class SoftQuantizeLoggerCallback(tf.keras.callbacks.Callback):
         row = (
             [epoch, k_val] +
             levels +
-            thresholds +
+            thresholds # +
             # [raw_first_level] +
             # raw_level_deltas +
             # [raw_first_thr_delta] +
