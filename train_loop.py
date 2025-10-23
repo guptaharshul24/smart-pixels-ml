@@ -295,11 +295,6 @@ def main(seed):
         optimizer=tf.keras.optimizers.Nadam(learning_rate=1e-3),
         loss=custom_loss,
     )
-
-    if isinstance(model, LRMultiplierModel):
-        model.verify_lr_map(strict_keys=True)
-        model.log_lr_multiplier_assignments() 
-    
     logging.info("Model compiled with Nadam optimizer and custom_loss.")
     # --- END OF MODEL CREATION BLOCK ---
 
