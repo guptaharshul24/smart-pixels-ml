@@ -202,6 +202,7 @@ def create_vit_model(input_shape=(13,21,2),
   q_out = SoftQuantizeLayer(
       n_bits=2,
     #   initial_range=[-1.0, 1.0], # This shoudl be automatically used for the levels
+      initial_levels=np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
       threshold_offset=threshold_offset,
       initial_thresholds=initial_thresholds,
       trainable_levels=False,
@@ -226,19 +227,19 @@ def create_vit_model(input_shape=(13,21,2),
   x = layers.Flatten()(x)
   x = layers.Dense(64, activation='relu')(x)
   outputs = layers.Dense(final_outputs, activation='linear')(x)
-  # model = keras.Model(inputs=inp, outputs=outputs)
+  model = keras.Model(inputs=inp, outputs=outputs)
 
-  model = LRMultiplierModel(
-        inputs=inp, outputs=outputs,
-        lr_multipliers={
-            "soft_quantizer_output/threshold_deltas_raw": 1e5,
-            # "soft_quantizer_output/level_deltas_raw": 1.0,
-            # "soft_quantizer_output/first_level": 1.0,
-            # "soft_quantizer_output/log_k": 1.0,
-        },
-        require_match_substrings=["soft_quantizer_output/threshold_deltas_raw"],
-        error_on_unmatched_required=True,
-    )
+#   model = LRMultiplierModel(
+#         inputs=inp, outputs=outputs,
+#         lr_multipliers={
+#             "soft_quantizer_output/threshold_deltas_raw": 1e5,
+#             # "soft_quantizer_output/level_deltas_raw": 1.0,
+#             # "soft_quantizer_output/first_level": 1.0,
+#             # "soft_quantizer_output/log_k": 1.0,
+#         },
+#         require_match_substrings=["soft_quantizer_output/threshold_deltas_raw"],
+#         error_on_unmatched_required=True,
+#     )
   return model
 
 # %%
@@ -323,9 +324,6 @@ class SoftQuantizeLoggerCallback(tf.keras.callbacks.Callback):
         )
         with open(self.log_filepath, "a", newline="") as f:
             csv.writer(f).writerow(row)
-
-# CHANGE: Group-aware gradient logger with CSV + per-group top-K prints.
-# REASON: Compare quantizer vs selected model weights side-by-side.
 
 class GradientLogger(tf.keras.callbacks.Callback):
     def __init__(
@@ -525,7 +523,6 @@ def main(seed):
     checkpoints_dir = os.path.join(base_dir, 'checkpoints')
     os.makedirs(checkpoints_dir, exist_ok=True)
     
-    # CRITICAL FIX: Changed .hdf5 to .weights.h5
     checkpoint_filepath = os.path.join(checkpoints_dir, 'weights.{epoch:02d}-t{loss:.2f}-v{val_loss:.2f}.hdf5')
     logging.info(f"Checkpoints will be saved to: {checkpoint_filepath}")
 
@@ -614,7 +611,8 @@ def main(seed):
         group_specs=group_specs,
     )
     
-    all_callbacks = [mcp, csv_logger, scheduler_callback, quantizer_logger, abort_bad, gradient_logger]
+    # all_callbacks = [mcp, csv_logger, scheduler_callback, quantizer_logger, abort_bad, gradient_logger]
+    all_callbacks = [mcp, csv_logger, scheduler_callback, quantizer_logger]    
 
     # --- MODEL TRAINING ---
     logging.info("--- Starting model.fit() ---")
