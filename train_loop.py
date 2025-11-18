@@ -149,7 +149,9 @@ def create_vit_model(input_shape=(13,21,2),
 # %%
 # Dataset and TFRecord paths
 logging.info("--- DATASET CONFIGURATION ---")
-dataset_base_dir = "/depot/cms/users/das214/datasets/dataset_3sr/dataset_3sr_16x16_50x12P5_parquets/"
+# dataset_base_dir = "/depot/cms/users/das214/datasets/dataset_3sr/dataset_3sr_16x16_50x12P5_parquets/"
+dataset_base_dir = '/depot/cms/users/das214/datasets/largerWindowPreliminary/dataset_3sr_16x16_50x12P5_centeredIncidence_parquets/'
+
 logging.info(f"Dataset base directory: {dataset_base_dir}")
 
 NOISE_MU = 0.0
@@ -266,7 +268,7 @@ def main(seed):
 
     num_thresholds = 3
     threshold_offset = 80.0
-    thr_low, thr_high = threshold_offset, 2000.0
+    thr_low, thr_high = threshold_offset, 2200.0
     random_thresholds = sample_thresholds(seed, thr_low, thr_high, num_thresholds)
     logging.info(f"Initial thresholds (run-seeded): {random_thresholds}")
 
@@ -316,7 +318,7 @@ def main(seed):
     logging.info("Training generator created.")
 
     os.makedirs("trained_models", exist_ok=True)
-    base_dir = f'/home/das214/work/users/das214/SmartPixels/SoftQuantize/trained_models/2t_N_rnd_thr_{NOISE_MU}mu_{NOISE_SIGMA}sig_NoLog_Stdr_4p0/Transformer_model-{fingerprint}-checkpoints'
+    base_dir = f'/home/das214/work/users/das214/SmartPixels/SoftQuantize/largerWindowPreliminary/dataset_3sr_16x16_50x12P5_centeredIncidence_parquets/trained_models/2t_N_rnd_thr_{NOISE_MU}mu_{NOISE_SIGMA}sig_NoLog_Stdr_4p0_ThOf{threshold_offset}_ThL{thr_low}_ThH{thr_high}/Transformer_model-{fingerprint}-checkpoints'
     logging.info(f"Base output directory: {base_dir}")
     checkpoints_dir = os.path.join(base_dir, 'checkpoints')
     os.makedirs(checkpoints_dir, exist_ok=True)
@@ -348,7 +350,7 @@ def main(seed):
     logging.info(f"SoftQuantizeLayer state will be logged to: {quantizer_log_path}")
     abort_bad = AbortOnStuck(threshold=1e5, patience=5)
     
-    all_callbacks = [mcp, csv_logger, scheduler_callback, quantizer_logger]    
+    all_callbacks = [mcp, csv_logger, scheduler_callback, quantizer_logger, abort_bad]    
 
     # --- MODEL TRAINING ---
     logging.info("--- Starting model.fit() ---")
