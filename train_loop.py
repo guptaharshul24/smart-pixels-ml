@@ -25,7 +25,6 @@ logging.basicConfig(
     ]
 )
 logging.info("--- Script Execution Started ---")
-# -----------------------------
 
 pi = 3.14159265359
 maxval=1e9
@@ -298,7 +297,6 @@ def main(seed):
         loss=custom_loss,
     )
     logging.info("Model compiled with Nadam optimizer and custom_loss.")
-    # --- END OF MODEL CREATION BLOCK ---
 
     # --- DATA GENERATORS AND CALLBACKS ---
     logging.info("Creating data generators from TFRecords...")
