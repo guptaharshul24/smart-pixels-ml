@@ -34,24 +34,24 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("runLOG_rnd_thr_noise_corr_contained.txt"),
+        logging.FileHandler("runLOG_rnd_thr_noise_corr_contained_2ns5ns.txt"),
         logging.StreamHandler()
     ]
 )
-logging.info("--- Script Execution Started (correlated noise + contained-cluster filter + 5000-epoch variant) ---")
+logging.info("--- Script Execution Started (correlated noise + contained-cluster filter + 2ns/5ns time slices + 5000-epoch variant) ---")
 
 pi = 3.14159265359
 maxval=1e9
 minval=1e-9
 
 # %%
-from DG.OptimizedDataGenerator_v2p5 import OptimizedDataGenerator
+from DG.OptimizedDataGenerator_v3 import OptimizedDataGenerator
 from losses.loss import custom_loss
 from models.SoftQuantizeLayer import SoftQuantizeLayer
 from models.AnnealingScheduler import AnnealingScheduler
 
 # %%
-# Transformer model (identical architecture to train_loop_rnd_thr.py)
+# Transformer model (identical architecture to train_loop_rnd_thr_noise_corr_contained.py)
 class PatchExtractor(layers.Layer):
   """Extract 2D patches from images."""
   def __init__(self, patch_size=(3,7)):
@@ -160,13 +160,13 @@ def create_vit_model(input_shape=(16,16,2),
 
 # %%
 # Dataset and TFRecord paths -- correlated-noise TFRecords built from the contained-cluster
-# (original_atEdge==False) parquet pool
+# (original_atEdge==False) parquet pool, time slices 2ns (index 10) and 5ns (index 25)
 logging.info("--- DATASET CONFIGURATION ---")
 dataset_base_dir = '/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d'
 
 logging.info(f"Dataset base directory: {dataset_base_dir}")
 
-tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained")
+tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained_2ns5ns")
 tfrecords_dir_train = os.path.join(tfrecords_base_dir, "TFR_train")
 tfrecords_dir_val   = os.path.join(tfrecords_base_dir, "TFR_val")
 
@@ -178,26 +178,18 @@ os.makedirs(tfrecords_dir_val, exist_ok=True)
 
 # %%
 # --- RUN COUNT, RESUMABILITY, AND STUCK-RUN HANDLING ---
-# 5000 epochs/run (5x train_loop_rnd_thr.py's 1000) -> fewer target runs (5 instead of 10) to
-# keep total wall-clock time reasonable. AbortOnStuck patience = 20 (matches the noise_corr case):
-# observed stuck runs flatline at ~1e5 almost immediately, so waiting longer just wastes
-# several hours per bad seed for no benefit.
 EPOCHS = 5000
 TARGET_RUNS = 5
-# Previously SEEDS = [42 + 1000*i for i in range(40)] -- a plain arithmetic progression. A bad/stuck
-# seed in that scheme prompted switching to a deterministically-generated (still reproducible) but
-# non-arithmetic pool: same master seed always regenerates the same 40 values, but they no longer sit
-# on a simple linear grid. Each run's actual seed is still recorded per-row in the JSONL regardless.
 SEEDS = [int(s) for s in np.random.default_rng(20260627).integers(0, 2**31 - 1, size=40)]
-TIME_STAMPS = [5, 30]
+TIME_STAMPS = [10, 25]   # 2ns and 5ns (0.2 ns/index; index 10 = 2ns, index 25 = 5ns)
 STUCK_THRESHOLD = 1e5
 STUCK_PATIENCE = 20
 ESCAPE_BELOW = 5e4
 
-trained_models_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained")
+trained_models_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns")
 os.makedirs(trained_models_dir, exist_ok=True)
-threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr_contained.jsonl")
-median_thresholds_path = os.path.join(trained_models_dir, "median_thresholds_rnd_thr_noise_corr_contained.json")
+threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr_contained_2ns5ns.jsonl")
+median_thresholds_path = os.path.join(trained_models_dir, "median_thresholds_rnd_thr_noise_corr_contained_2ns5ns.json")
 
 
 def load_collected():
@@ -344,7 +336,7 @@ def main(seed, run_index):
     )
     logging.info("Training generator created.")
 
-    base_dir = f'{trained_models_dir}/2t_rnd_thr_noise_corr_contained_5000ep_NoLog_Stdr_4p0_ThOf{threshold_offset}_ThL{thr_low}_ThH{thr_high}/Transformer_model-{fingerprint}-checkpoints'
+    base_dir = f'{trained_models_dir}/2t_rnd_thr_noise_corr_contained_2ns5ns_5000ep_NoLog_Stdr_4p0_ThOf{threshold_offset}_ThL{thr_low}_ThH{thr_high}/Transformer_model-{fingerprint}-checkpoints'
     logging.info(f"Base output directory: {base_dir}")
     checkpoints_dir = os.path.join(base_dir, 'checkpoints')
     os.makedirs(checkpoints_dir, exist_ok=True)
@@ -381,10 +373,7 @@ def main(seed, run_index):
     # --- Mid-run resume: base_dir/fingerprint/thresholds are all deterministic functions of
     # `seed` alone, so a relaunch with the same seed recomputes the same checkpoints_dir. If a
     # prior (interrupted) attempt already logged epochs here, pick up from the last one instead
-    # of retraining from epoch 0. Model weights are restored via load_weights (thresholds/levels/
-    # k are all registered via add_weight in SoftQuantizeLayer, so they're included); optimizer
-    # state (Nadam momentum) is NOT restored since we only save_weights_only -- expect a small
-    # transient loss bump right after resuming while it re-warms up.
+    # of retraining from epoch 0.
     initial_epoch = 0
     if os.path.exists(csv_log_path):
         with open(csv_log_path) as f:
@@ -415,10 +404,6 @@ def main(seed, run_index):
         )
     logging.info("--- Model training finished for this run ---")
 
-    # Read from the CSV (not history.history) so a resumed run's best_val_loss/epochs_run cover
-    # the *whole* run (epoch 0 onward), not just the epochs since the last resume -- CSVLogger's
-    # append=True keeps csv_log_path complete across restarts, but history.history only has
-    # whatever epochs this particular model.fit() call actually ran (initial_epoch onward).
     with open(csv_log_path) as f:
         full_log_rows = list(csv.DictReader(f))
     val_losses = [float(r["val_loss"]) for r in full_log_rows] if full_log_rows else [np.inf]
@@ -467,7 +452,25 @@ def main(seed, run_index):
     return stuck
 
 if __name__ == "__main__":
-    logging.info("Script invoked directly. Starting main execution loop.")
+    import subprocess
+    import argparse
+
+    # --- Subprocess mode: run a single seed and exit (GPU memory released on process exit) ---
+    if '--seed' in sys.argv:
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--seed', type=int, required=True)
+        parser.add_argument('--run_index', type=int, required=True)
+        args = parser.parse_args()
+        # Uncaught exceptions (OOM, etc.) crash the subprocess with exit code 1 --
+        # the orchestrator detects this via returncode and retries.
+        main(seed=args.seed, run_index=args.run_index)
+        sys.exit(0)
+
+    # --- Orchestrator mode: loop through seeds, one subprocess per run ---
+    # Each run is a fresh process so TF's GPU memory pool is fully released between runs.
+    # This avoids within-process GPU memory fragmentation after long runs (observed 2026-07-01:
+    # all 39 seeds after run 0 OOM'd because TF held run 0's peak allocation in its pool).
+    logging.info("Script invoked directly (orchestrator mode). Starting main execution loop.")
 
     done_seeds = {r["seed"] for r in load_collected()}
     completed_runs = sum(1 for r in load_collected() if not r.get("stuck", False))
@@ -483,32 +486,33 @@ if __name__ == "__main__":
             continue
         oom_retries = 0
         while True:
-            try:
-                stuck = main(seed=run_seed, run_index=run_index)
+            logging.info(f"Launching subprocess for seed={run_seed}, run_index={run_index} "
+                          f"(attempt {oom_retries + 1}/{MAX_OOM_RETRIES + 1})")
+            result = subprocess.run(
+                [sys.executable, os.path.abspath(__file__),
+                 '--seed', str(run_seed), '--run_index', str(run_index)],
+                env=os.environ.copy()
+            )
+            if result.returncode == 0:
+                new_rec = next((r for r in load_collected() if r['seed'] == run_seed), None)
+                if new_rec is None:
+                    logging.error(f"Subprocess exited 0 but no JSONL record for seed={run_seed}; skipping.")
+                    break
+                stuck = new_rec.get('stuck', False)
                 if not stuck:
                     completed_runs += 1
                 logging.info(f"--- Completed run {completed_runs}/{TARGET_RUNS} "
                               f"(run_index={run_index}, seed={run_seed}, stuck={stuck}) ---")
                 break
-            except tf.errors.ResourceExhaustedError as e:
-                # Transient/environmental (e.g. GPU memory not yet reclaimed from a just-killed
-                # process), not a property of this seed -- retry the SAME seed instead of burning
-                # through the pool. The resume logic above means re-entering main() picks up any
-                # partially-saved checkpoint for this seed too.
+            else:
                 oom_retries += 1
                 if oom_retries > MAX_OOM_RETRIES:
-                    logging.error(f"GPU OOM persisted after {MAX_OOM_RETRIES} retries for "
-                                   f"seed={run_seed}; giving up on this seed and moving on.")
+                    logging.error(f"Subprocess failed after {MAX_OOM_RETRIES} retries for "
+                                   f"seed={run_seed} (exit code {result.returncode}); skipping seed.")
                     break
-                logging.warning(f"GPU OOM on seed={run_seed} (retry {oom_retries}/{MAX_OOM_RETRIES}); "
-                                 f"waiting 30s for GPU memory to clear before retrying.")
+                logging.warning(f"Subprocess failed (exit code {result.returncode}) for "
+                                 f"seed={run_seed} (retry {oom_retries}/{MAX_OOM_RETRIES}); waiting 30s.")
                 time.sleep(30)
-            except Exception as e:
-                logging.error(f"An exception occurred in main execution "
-                               f"(run_index={run_index}, seed={run_seed}): {e}", exc_info=True)
-                logging.info("Continuing with next seed...")
-                time.sleep(5)
-                break
 
     med, n = running_median()
     summary = {
@@ -516,7 +520,7 @@ if __name__ == "__main__":
         "median_thresholds": med,
         "levels": [0.0, 1.0, 2.0, 3.0],
         "time_stamps": TIME_STAMPS,
-        "note": "median over non-stuck runs; per-run details in threshold_runs_rnd_thr_noise_corr_contained.jsonl",
+        "note": "median over non-stuck runs; per-run details in threshold_runs_rnd_thr_noise_corr_contained_2ns5ns.jsonl",
     }
     with open(median_thresholds_path, "w") as f:
         json.dump(summary, f, indent=1)

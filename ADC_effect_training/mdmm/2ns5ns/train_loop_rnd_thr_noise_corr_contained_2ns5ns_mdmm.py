@@ -46,7 +46,7 @@ maxval=1e9
 minval=1e-9
 
 # %%
-from DG.OptimizedDataGenerator_v2p5 import OptimizedDataGenerator
+from DG.OptimizedDataGenerator_v3 import OptimizedDataGenerator
 from losses.loss import custom_loss
 from models.SoftQuantizeLayer import SoftQuantizeLayer
 from models.AnnealingScheduler import AnnealingScheduler

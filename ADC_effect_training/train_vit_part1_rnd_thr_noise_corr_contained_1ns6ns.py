@@ -12,6 +12,8 @@ import os
 import sys
 import random
 import json
+import glob
+import re
 from datetime import datetime
 import logging
 import csv
@@ -21,23 +23,29 @@ import numpy as np # Added for seeding
 # DG/losses/models live at the repo root, one level up from this ADC_effect_training/ dir
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import utils
+# Without this, TF grabs a large upfront chunk of GPU memory (not on-demand) on first use --
+# fine in isolation, but on this shared 5GB MIG slice it races with a just-killed process's
+# not-yet-fully-reclaimed allocation, causing a same-process-restart OOM (observed 2026-06-29).
+utils.check_GPU()
+
 # --- LOGGING CONFIGURATION ---
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("runLOG_rnd_thr_noise_corr.txt"),
+        logging.FileHandler("runLOG_rnd_thr_noise_corr_contained.txt"),
         logging.StreamHandler()
     ]
 )
-logging.info("--- Script Execution Started (correlated noise + 5000-epoch variant) ---")
+logging.info("--- Script Execution Started (correlated noise + contained-cluster filter + 5000-epoch variant) ---")
 
 pi = 3.14159265359
 maxval=1e9
 minval=1e-9
 
 # %%
-from DG.OptimizedDataGenerator_v2p5 import OptimizedDataGenerator
+from DG.OptimizedDataGenerator_v3 import OptimizedDataGenerator
 from losses.loss import custom_loss
 from models.SoftQuantizeLayer import SoftQuantizeLayer
 from models.AnnealingScheduler import AnnealingScheduler
@@ -151,13 +159,14 @@ def create_vit_model(input_shape=(16,16,2),
   return model
 
 # %%
-# Dataset and TFRecord paths -- noisy TFRecords (ADC/CSA correlated noise baked in)
+# Dataset and TFRecord paths -- correlated-noise TFRecords built from the contained-cluster
+# (original_atEdge==False) parquet pool
 logging.info("--- DATASET CONFIGURATION ---")
 dataset_base_dir = '/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d'
 
 logging.info(f"Dataset base directory: {dataset_base_dir}")
 
-tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr")
+tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained")
 tfrecords_dir_train = os.path.join(tfrecords_base_dir, "TFR_train")
 tfrecords_dir_val   = os.path.join(tfrecords_base_dir, "TFR_val")
 
@@ -170,21 +179,25 @@ os.makedirs(tfrecords_dir_val, exist_ok=True)
 # %%
 # --- RUN COUNT, RESUMABILITY, AND STUCK-RUN HANDLING ---
 # 5000 epochs/run (5x train_loop_rnd_thr.py's 1000) -> fewer target runs (5 instead of 10) to
-# keep total wall-clock time reasonable. AbortOnStuck patience reverted to 20 (was briefly 500):
-# observed stuck runs flatline at ~1e5 almost immediately, so waiting 500 epochs just wastes
+# keep total wall-clock time reasonable. AbortOnStuck patience = 20 (matches the noise_corr case):
+# observed stuck runs flatline at ~1e5 almost immediately, so waiting longer just wastes
 # several hours per bad seed for no benefit.
 EPOCHS = 5000
 TARGET_RUNS = 5
-SEEDS = [42 + 1000 * i for i in range(40)]
+# Previously SEEDS = [42 + 1000*i for i in range(40)] -- a plain arithmetic progression. A bad/stuck
+# seed in that scheme prompted switching to a deterministically-generated (still reproducible) but
+# non-arithmetic pool: same master seed always regenerates the same 40 values, but they no longer sit
+# on a simple linear grid. Each run's actual seed is still recorded per-row in the JSONL regardless.
+SEEDS = [int(s) for s in np.random.default_rng(20260627).integers(0, 2**31 - 1, size=40)]
 TIME_STAMPS = [5, 30]
 STUCK_THRESHOLD = 1e5
 STUCK_PATIENCE = 20
 ESCAPE_BELOW = 5e4
 
-trained_models_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr")
+trained_models_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained")
 os.makedirs(trained_models_dir, exist_ok=True)
-threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr.jsonl")
-median_thresholds_path = os.path.join(trained_models_dir, "median_thresholds_rnd_thr_noise_corr.json")
+threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr_contained.jsonl")
+median_thresholds_path = os.path.join(trained_models_dir, "median_thresholds_rnd_thr_noise_corr_contained.json")
 
 
 def load_collected():
@@ -211,6 +224,10 @@ class SoftQuantizeLoggerCallback(tf.keras.callbacks.Callback):
 
     def on_train_begin(self, logs=None):
         os.makedirs(os.path.dirname(self.log_filepath), exist_ok=True)
+        # Resuming a run: file already has a header+rows from before the interruption --
+        # don't let on_epoch_end's header_written check re-open (and truncate) it.
+        if os.path.exists(self.log_filepath) and os.path.getsize(self.log_filepath) > 0:
+            self.header_written = True
 
     def on_epoch_end(self, epoch, logs=None):
         try:
@@ -327,7 +344,7 @@ def main(seed, run_index):
     )
     logging.info("Training generator created.")
 
-    base_dir = f'{trained_models_dir}/2t_rnd_thr_noise_corr_5000ep_NoLog_Stdr_4p0_ThOf{threshold_offset}_ThL{thr_low}_ThH{thr_high}/Transformer_model-{fingerprint}-checkpoints'
+    base_dir = f'{trained_models_dir}/2t_rnd_thr_noise_corr_contained_5000ep_NoLog_Stdr_4p0_ThOf{threshold_offset}_ThL{thr_low}_ThH{thr_high}/Transformer_model-{fingerprint}-checkpoints'
     logging.info(f"Base output directory: {base_dir}")
     checkpoints_dir = os.path.join(base_dir, 'checkpoints')
     os.makedirs(checkpoints_dir, exist_ok=True)
@@ -361,18 +378,50 @@ def main(seed, run_index):
 
     all_callbacks = [mcp, csv_logger, scheduler_callback, quantizer_logger, abort_bad]
 
+    # --- Mid-run resume: base_dir/fingerprint/thresholds are all deterministic functions of
+    # `seed` alone, so a relaunch with the same seed recomputes the same checkpoints_dir. If a
+    # prior (interrupted) attempt already logged epochs here, pick up from the last one instead
+    # of retraining from epoch 0. Model weights are restored via load_weights (thresholds/levels/
+    # k are all registered via add_weight in SoftQuantizeLayer, so they're included); optimizer
+    # state (Nadam momentum) is NOT restored since we only save_weights_only -- expect a small
+    # transient loss bump right after resuming while it re-warms up.
+    initial_epoch = 0
+    if os.path.exists(csv_log_path):
+        with open(csv_log_path) as f:
+            prior_rows = list(csv.DictReader(f))
+        if prior_rows:
+            ckpt_files = glob.glob(os.path.join(checkpoints_dir, "weights.*.weights.h5"))
+            if ckpt_files:
+                latest_ckpt = max(
+                    ckpt_files,
+                    key=lambda p: int(re.search(r"weights\.(\d+)-", os.path.basename(p)).group(1))
+                )
+                initial_epoch = int(prior_rows[-1]["epoch"]) + 1
+                logging.info(f"Resuming run from epoch {initial_epoch}, loading weights from {latest_ckpt}")
+                model.load_weights(latest_ckpt)
+            else:
+                logging.warning(f"{csv_log_path} has prior rows but no checkpoint files found in "
+                                 f"{checkpoints_dir}; starting fresh from epoch 0")
+
     logging.info("--- Starting model.fit() ---")
     history = model.fit(
             x=training_generator,
             validation_data=validation_generator,
             callbacks=all_callbacks,
             epochs=EPOCHS,
+            initial_epoch=initial_epoch,
             shuffle=False,
             verbose=1
         )
     logging.info("--- Model training finished for this run ---")
 
-    val_losses = history.history.get("val_loss", [np.inf])
+    # Read from the CSV (not history.history) so a resumed run's best_val_loss/epochs_run cover
+    # the *whole* run (epoch 0 onward), not just the epochs since the last resume -- CSVLogger's
+    # append=True keeps csv_log_path complete across restarts, but history.history only has
+    # whatever epochs this particular model.fit() call actually ran (initial_epoch onward).
+    with open(csv_log_path) as f:
+        full_log_rows = list(csv.DictReader(f))
+    val_losses = [float(r["val_loss"]) for r in full_log_rows] if full_log_rows else [np.inf]
     best_val_loss = float(min(val_losses))
     epochs_run = len(val_losses)
     stuck = best_val_loss >= ESCAPE_BELOW
@@ -426,22 +475,40 @@ if __name__ == "__main__":
         logging.info(f"Resuming: {len(done_seeds)} seed(s) already attempted, "
                       f"{completed_runs} completed (non-stuck) run(s).")
 
+    MAX_OOM_RETRIES = 3
     for run_index, run_seed in enumerate(SEEDS):
         if completed_runs >= TARGET_RUNS:
             break
         if run_seed in done_seeds:
             continue
-        try:
-            stuck = main(seed=run_seed, run_index=run_index)
-            if not stuck:
-                completed_runs += 1
-            logging.info(f"--- Completed run {completed_runs}/{TARGET_RUNS} "
-                          f"(run_index={run_index}, seed={run_seed}, stuck={stuck}) ---")
-        except Exception as e:
-            logging.error(f"An exception occurred in main execution "
-                           f"(run_index={run_index}, seed={run_seed}): {e}", exc_info=True)
-            logging.info("Continuing with next seed...")
-            time.sleep(5)
+        oom_retries = 0
+        while True:
+            try:
+                stuck = main(seed=run_seed, run_index=run_index)
+                if not stuck:
+                    completed_runs += 1
+                logging.info(f"--- Completed run {completed_runs}/{TARGET_RUNS} "
+                              f"(run_index={run_index}, seed={run_seed}, stuck={stuck}) ---")
+                break
+            except tf.errors.ResourceExhaustedError as e:
+                # Transient/environmental (e.g. GPU memory not yet reclaimed from a just-killed
+                # process), not a property of this seed -- retry the SAME seed instead of burning
+                # through the pool. The resume logic above means re-entering main() picks up any
+                # partially-saved checkpoint for this seed too.
+                oom_retries += 1
+                if oom_retries > MAX_OOM_RETRIES:
+                    logging.error(f"GPU OOM persisted after {MAX_OOM_RETRIES} retries for "
+                                   f"seed={run_seed}; giving up on this seed and moving on.")
+                    break
+                logging.warning(f"GPU OOM on seed={run_seed} (retry {oom_retries}/{MAX_OOM_RETRIES}); "
+                                 f"waiting 30s for GPU memory to clear before retrying.")
+                time.sleep(30)
+            except Exception as e:
+                logging.error(f"An exception occurred in main execution "
+                               f"(run_index={run_index}, seed={run_seed}): {e}", exc_info=True)
+                logging.info("Continuing with next seed...")
+                time.sleep(5)
+                break
 
     med, n = running_median()
     summary = {
@@ -449,7 +516,7 @@ if __name__ == "__main__":
         "median_thresholds": med,
         "levels": [0.0, 1.0, 2.0, 3.0],
         "time_stamps": TIME_STAMPS,
-        "note": "median over non-stuck runs; per-run details in threshold_runs_rnd_thr_noise_corr.jsonl",
+        "note": "median over non-stuck runs; per-run details in threshold_runs_rnd_thr_noise_corr_contained.jsonl",
     }
     with open(median_thresholds_path, "w") as f:
         json.dump(summary, f, indent=1)

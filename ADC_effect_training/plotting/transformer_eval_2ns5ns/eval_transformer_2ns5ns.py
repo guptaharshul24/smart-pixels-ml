@@ -28,7 +28,7 @@ sys.path.insert(0, repo_root)
 import utils
 utils.check_GPU()
 
-from DG.OptimizedDataGenerator_v2p5 import OptimizedDataGenerator
+from DG.OptimizedDataGenerator_v3 import OptimizedDataGenerator
 from models.SoftQuantizeLayer import SoftQuantizeLayer
 
 pi = 3.14159265359

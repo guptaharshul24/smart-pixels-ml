@@ -24,6 +24,9 @@ import logging
 import subprocess
 import numpy as np
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+from sync_campaign_records import sync_campaign_records
+
 # ── logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -58,6 +61,7 @@ TIME_STAMPS = [5, 30]
 TARGET_RUNS = 5
 MAX_RETRIES_PER_SEED = 3
 RETRY_WAIT_S = 30
+RECORDS_DEST = "mdmm_1ns6ns/corr1e4"
 
 
 def load_events():
@@ -134,6 +138,7 @@ def run_one(seed, run_index):
                 return False
             logging.info(f"--- Run done (run_index={run_index}, seed={seed}, "
                          f"stuck={rec.get('stuck', False)}, best_val={rec.get('best_val_loss')}) ---")
+            sync_campaign_records(TRAINED_MODELS_DIR, RECORDS_DEST)
             return True
 
         append_event({
@@ -189,6 +194,7 @@ def main():
             logging.error(f"Seed {seed} abandoned after repeated failures.")
 
     write_median()
+    sync_campaign_records(TRAINED_MODELS_DIR, RECORDS_DEST)
     logging.info("=== Orchestrator finished ===")
 
 

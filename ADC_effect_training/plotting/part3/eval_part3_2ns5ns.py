@@ -1,7 +1,12 @@
 """
-Evaluate the best Part-1 transformer run (lowest best_val_loss NLL) for the
-corr-noise + contained + 2ns/5ns case: residuals, pulls, and summary (money) plots.
-Adapted from das214's from_weights_conv2D.ipynb evaluation flow.
+Evaluate a Part 3 (2ns5ns) QConv2D run: residuals, pulls, sigma hists, and
+summary (money) plots. Same pattern as plotting/part2/eval_part2_2ns5ns.py,
+adapted for models.models.CreateModel instead of the ViT.
+
+Note: model.predict() needs run_eagerly=True at compile time -- QKeras's
+QSeparableConv2D quantizer calls .numpy() internally, which raises
+NotImplementedError under graph-mode tracing (same issue documented in
+train_qconv2d_part3_noise_corr_contained_2ns5ns_mdmm_corr1e4.py).
 """
 import os
 import sys
@@ -18,119 +23,28 @@ import seaborn as sns
 from scipy.optimize import curve_fit
 
 import tensorflow as tf
-from tensorflow.keras import layers
-import keras
 
-# repo root: file now lives in mdmm/<case>/plotting/corr1e4/ (one level deeper
-# than plotting/<case>/ after the 2026-07-13 corr1e4/archive_* reorg), so this
-# needs 5 ".." not 4 -- verified by checking DG/ actually exists at the result.
-repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", ".."))
+# repo root: file lives in ADC_effect_training/plotting/part3/, 3 levels down
+repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 sys.path.insert(0, repo_root)
 
 import utils
 utils.check_GPU()
 
 from DG.OptimizedDataGenerator_v3 import OptimizedDataGenerator
-from models.SoftQuantizeLayer import SoftQuantizeLayer
+from losses.loss import custom_loss
+from models.models import CreateModel
 
 pi = 3.14159265359
 minval = 1e-9
 
 # ---------------------------------------------------------------- configuration
 dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d"
-trained_models_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm")
-threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr_contained_2ns5ns_mdmm.jsonl")
+campaign4_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm")
+part3_output_dir = os.path.join(campaign4_dir, "part3_qconv2d")
 tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained_2ns5ns", "TFR_val")
 out_base = os.path.dirname(os.path.abspath(__file__))
-CASE_TAG = "MDMM correlation-constraint 1e4 + corr noise + contained + 2ns/5ns"
-
-# ------------------------------------------------- model (identical to training)
-class PatchExtractor(layers.Layer):
-  """Extract 2D patches from images."""
-  def __init__(self, patch_size=(3,7)):
-    super().__init__()
-    self.patch_size = patch_size
-
-  def call(self, images):
-    patch_h, patch_w = self.patch_size
-    batch_size = tf.shape(images)[0]
-    patches = tf.image.extract_patches(
-        images=images,
-        sizes=(1, patch_h, patch_w, 1),
-        strides=(1, patch_h, patch_w, 1),
-        rates=(1,1,1,1),
-        padding='VALID'
-    )
-    patch_dims = tf.shape(patches)[-1]
-    patches = tf.reshape(patches, [batch_size, -1, patch_dims])
-    return patches
-
-class PatchEncoder(layers.Layer):
-  """Linear embedding + learnable positional encoding."""
-  def __init__(self, num_patches, embed_dim):
-    super().__init__()
-    self.num_patches = num_patches
-    self.projection  = layers.Dense(embed_dim)
-    self.pos_embed   = tf.Variable(
-        initial_value=tf.zeros((1,num_patches,embed_dim)),
-        trainable=True,
-        name="pos_embedding"
-    )
-
-  def call(self, patch_batch):
-    projected = self.projection(patch_batch)
-    return projected + self.pos_embed
-
-def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0.1):
-  x = layers.LayerNormalization(epsilon=1e-6)(inputs)
-  x = layers.MultiHeadAttention(num_heads=num_heads,
-                                key_dim=head_size,
-                                dropout=dropout)(x, x)
-  x = layers.Dropout(dropout)(x)
-  res = x + inputs
-  x = layers.LayerNormalization(epsilon=1e-6)(res)
-  x = layers.Dense(ff_dim, activation="relu")(x)
-  x = layers.Dropout(dropout)(x)
-  x = layers.Dense(inputs.shape[-1], activation="linear")(x)
-  x = layers.Dropout(dropout)(x)
-  return x + res
-
-def create_vit_model(input_shape=(16,16,2),
-                     patch_size=(3,4),
-                     embed_dim=64,
-                     num_heads=4,
-                     ff_dim=128,
-                     num_layers=4,
-                     dropout=0.1,
-                     final_outputs=14,
-                     initial_thresholds=None,
-                     threshold_offset=0.0):
-  inp = layers.Input(shape=input_shape, name="raw_input")
-  q_out = SoftQuantizeLayer(
-      n_bits=2,
-      initial_levels=np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32),
-      threshold_offset=threshold_offset,
-      initial_thresholds=initial_thresholds,
-      trainable_levels=False,
-      trainable_thresholds=True,
-      initial_k=1.0,
-      trainable_k=True,
-      name="soft_quantizer_output"
-  )(inp)
-  patches = PatchExtractor(patch_size=patch_size)(q_out)
-  H, W, C = input_shape
-  ph, pw  = patch_size
-  num_patches = (H // ph) * (W // pw)
-  encoded_patches = PatchEncoder(num_patches, embed_dim)(patches)
-  x = encoded_patches
-  for _ in range(num_layers):
-    x = transformer_encoder(x, head_size=embed_dim, num_heads=num_heads,
-                            ff_dim=ff_dim, dropout=dropout)
-  x = layers.LayerNormalization(epsilon=1e-6)(x)
-  x = layers.Flatten()(x)
-  x = layers.Dense(64, activation='relu')(x)
-  outputs = layers.Dense(final_outputs, activation='linear')(x)
-  return keras.Model(inputs=inp, outputs=outputs)
+CASE_TAG = "Part 3 (QConv2D, frozen hard-digitized thresholds, MDMM) 2ns/5ns"
 
 # ----------------------------------------------------------- run selection
 parser = argparse.ArgumentParser()
@@ -138,36 +52,28 @@ parser.add_argument('--fingerprint', type=str, default=None,
                     help="evaluate this run instead of the best-NLL one")
 args = parser.parse_args()
 
-events = [json.loads(l) for l in open(threshold_runs_path) if l.strip()]
-completed = [r for r in events if r.get("status", "completed") == "completed"
-             and not r.get("stuck", False)]
-started = [r for r in events if r.get("status") == "started"]
+summary_paths = glob.glob(os.path.join(part3_output_dir, "**", "summary.json"), recursive=True)
+if not summary_paths:
+    raise SystemExit(f"No Part 3 summary.json found under {part3_output_dir} -- has a run completed yet?")
+summaries = [json.load(open(p)) for p in summary_paths]
 if args.fingerprint:
-    record = next(r for r in completed + started if r["fingerprint"] == args.fingerprint)
-elif completed:
-    record = min(completed, key=lambda r: r["best_val_loss"])
+    record = next(r for r in summaries if r["fingerprint"] == args.fingerprint)
 else:
-    record = started[-1]
-    print(f"No completed runs yet; evaluating in-progress run {record['fingerprint']} "
-          f"at its best checkpoint so far.")
+    record = min(summaries, key=lambda r: r["best_val_loss"])
 
 fingerprint = record["fingerprint"]
 print(f"Evaluating run {fingerprint} (seed={record['seed']}, "
-      f"best_val_loss={record.get('best_val_loss', 'in-progress')}, "
-      f"final_thresholds={[round(t,2) for t in record['final_thresholds']] if record.get('final_thresholds') else 'in-progress'})")
+      f"best_val_loss={record['best_val_loss']}, "
+      f"fixed_thresholds={[round(t,2) for t in record['fixed_thresholds']]})")
 
 plot_dir = os.path.join(out_base, fingerprint)
 os.makedirs(plot_dir, exist_ok=True)
 
 # --------------------------------------------------- build model + load weights
-model = create_vit_model(
-    initial_thresholds=record["init_thresholds"],
-    threshold_offset=record.get("threshold_offset", 0.0),
-)
+model = CreateModel(shape=(16, 16, 2), output=14, n_filters=5, pool_size=3)
+model.compile(optimizer=tf.keras.optimizers.Nadam(learning_rate=1e-3), loss=custom_loss, run_eagerly=True)
 
-ckpt_base = record.get("checkpoint_dir") or glob.glob(os.path.join(
-    trained_models_dir, "2t_*", f"Transformer_model-{record['fingerprint']}-checkpoints"))[0]
-checkpoints_dir = os.path.join(ckpt_base, "checkpoints")
+checkpoints_dir = os.path.join(record["checkpoint_dir"], "checkpoints")
 
 def extract_val_metric(fname):
     try:
@@ -186,6 +92,9 @@ test_generator = OptimizedDataGenerator(
     load_from_tfrecords_dir=tfrecords_dir_val,
     shuffle=False,
     quantize=False,
+    digitize=True,
+    digitize_thresholds=record["fixed_thresholds"],
+    digitize_levels=record["fixed_levels"],
 )
 labels_scale = test_generator.labels_scale
 print(f"labels_scale = {labels_scale}")
@@ -245,7 +154,7 @@ for ax, (var, tvar, scale, name) in zip(axes.flat, VARS):
     ax.set_xlabel(f"True - predicted {name}")
     ax.set_yscale('log')
     ax.grid(True, alpha=0.3)
-fig.suptitle(f"Residuals: transformer {fingerprint} ({CASE_TAG})")
+fig.suptitle(f"Residuals: {fingerprint} ({CASE_TAG})")
 plt.tight_layout()
 plt.savefig(os.path.join(plot_dir, "residual_hists.png"), dpi=120)
 plt.close()
@@ -257,7 +166,7 @@ for ax, ((var, tvar, scale, name), (svar, srange)) in zip(axes.flat, zip(VARS, s
     ax.hist(df[svar] * scale, bins=np.linspace(*srange, 50), histtype='step')
     ax.set_xlabel(f"predicted sigma {name}")
     ax.grid(True, alpha=0.3)
-fig.suptitle(f"Predicted uncertainties: transformer {fingerprint} ({CASE_TAG})")
+fig.suptitle(f"Predicted uncertainties: {fingerprint} ({CASE_TAG})")
 plt.tight_layout()
 plt.savefig(os.path.join(plot_dir, "sigma_hists.png"), dpi=120)
 plt.close()
@@ -288,7 +197,7 @@ pull_plot(axes[0][0], 'pullx',    r'$x$ pull')
 pull_plot(axes[0][1], 'pully',    r'$y$ pull')
 pull_plot(axes[1][0], 'pullcotA', r'$\cot\alpha$ pull')
 pull_plot(axes[1][1], 'pullcotB', r'$\cot\beta$ pull')
-fig.suptitle(f"Pulls: transformer {fingerprint} ({CASE_TAG})")
+fig.suptitle(f"Pulls: {fingerprint} ({CASE_TAG})")
 plt.tight_layout()
 plt.savefig(os.path.join(plot_dir, "pull.png"), dpi=120)
 plt.close()
@@ -353,7 +262,7 @@ residual_plot_deg(axes[1][0], df, 'cotAtrue', 'cotA', r'$\alpha$ [deg]', scaling
 axes[1][0].axvline(90, color='gray', linestyle=':')
 residual_plot_deg(axes[1][1], df, 'cotBtrue', 'cotB', r'$\beta$ [deg]', scaling=labels_scale[3])
 axes[1][1].axvline(90, color='gray', linestyle=':')
-fig.suptitle(f"Summary: transformer {fingerprint} ({CASE_TAG})", y=1.0)
+fig.suptitle(f"Summary: {fingerprint} ({CASE_TAG})", y=1.0)
 plt.savefig(os.path.join(plot_dir, "summary.png"), dpi=120, bbox_inches='tight')
 plt.close()
 

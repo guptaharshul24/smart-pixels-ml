@@ -3,18 +3,27 @@
 One-stop status + plotting for the MDMM correlation-constraint (corr1e4) campaigns.
 
 Usage:
-    /home/harshul-cern/work/pixi/global/.pixi/envs/default/bin/python status_and_plot.py [1ns6ns|2ns5ns|all] [--no-eval|--all-runs|--incremental]
+    /home/harshul-cern/work/pixi/global/.pixi/envs/default/bin/python status_and_plot.py [1ns6ns|2ns5ns|all] [--no-eval|--all-runs|--incremental] [--part1] [--part2] [--part3]
 
 Default (no arg) = all. Read-only on the training processes; only writes new
-PNGs into plotting/corr1e4/. Safe to run anytime, including mid-training.
+PNGs into plotting/corr1e4/ (Part 1) or plotting/part2//part3/ (Part 2/3).
+Safe to run anytime, including mid-training.
 
 --no-eval: campaign-level plots only (thresholds/losses/mdmm-state), skip
   per-fingerprint eval entirely (fastest).
 --all-runs: force-evaluate every run with a checkpoint, every time (slowest,
   no caching).
---incremental: evaluate every run with a checkpoint, but skip ones that are
-  already completed and already have a predictions.csv.
-(no flag): only evaluate the single best-completed/latest-in-progress run.
+--incremental: evaluate every run with a checkpoint (across Part 1, Part 2,
+  and Part 3 alike), but skip ones that are already completed and already
+  have a predictions.csv. Cheap plots (loss/threshold/mdmm-state) always
+  regenerate regardless of this flag -- only the expensive per-fingerprint
+  eval is cached.
+(no flag): only evaluate the single best-completed/latest-in-progress run,
+  per part.
+
+--part1 / --part2 / --part3: restrict to one or more parts (combine freely,
+  e.g. --part2 --part3 to skip Part 1 entirely). No part flag given = all
+  three (default, backward-compatible).
 
 For each case, prints:
   - whether the orchestrator/subprocess are alive
@@ -44,6 +53,9 @@ import json
 import glob
 import subprocess
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
+from sync_campaign_records import sync_campaign_records
+
 PYTHON = "/home/harshul-cern/work/pixi/global/.pixi/envs/default/bin/python"
 PIXI_LIB = "/home/harshul-cern/work/pixi/global/.pixi/envs/default/lib"
 MDMM_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -55,11 +67,33 @@ CASES = {
         "trained_models_dir": os.path.join(DATASET_BASE, "trained_models_1_6_noise_corr_contained_mdmm"),
         "jsonl_name": "threshold_runs_rnd_thr_noise_corr_contained_mdmm.jsonl",
         "proc_pattern": "1ns6ns_mdmm",
+        "records_dest": "mdmm_1ns6ns/corr1e4",
     },
     "2ns5ns": {
         "trained_models_dir": os.path.join(DATASET_BASE, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm"),
         "jsonl_name": "threshold_runs_rnd_thr_noise_corr_contained_2ns5ns_mdmm.jsonl",
         "proc_pattern": "2ns5ns_mdmm",
+        "records_dest": "mdmm_2ns5ns/corr1e4",
+    },
+}
+
+ADC_ROOT = os.path.dirname(MDMM_ROOT)
+
+# Part 2 (ViT, frozen thresholds) / Part 3 (QConv2D, frozen thresholds) -- both
+# trained on campaign 4's median, both single-run-with-retry (no multi-run
+# journal/median the way Part 1 campaigns have). Only 2ns5ns exists so far.
+PART23_CASES = {
+    "2ns5ns": {
+        "part2_script": "train_vit_part2_noise_corr_contained_2ns5ns_mdmm_corr1e4.py",
+        "part3_script": "train_qconv2d_part3_noise_corr_contained_2ns5ns_mdmm_corr1e4.py",
+        "part2_output_dir": os.path.join(
+            DATASET_BASE, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part2_vit"),
+        "part3_output_dir": os.path.join(
+            DATASET_BASE, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part3_qconv2d"),
+        "part2_ckpt_prefix": "Transformer_model",
+        "part3_ckpt_prefix": "QConv2D_model",
+        "part2_plot_dir": os.path.join(ADC_ROOT, "plotting", "part2"),
+        "part3_plot_dir": os.path.join(ADC_ROOT, "plotting", "part3"),
     },
 }
 
@@ -154,19 +188,21 @@ def latest_row_all(csv_path):
     return len(rows), min(vals), vals[-1]
 
 
-def eval_one(case_name, cfg, plot_dir, env, fingerprint=None):
-    """Run eval_transformer (+ pred_angle_dists on top of it) for one run.
-    fingerprint=None lets eval_transformer auto-select (best completed, else
+def eval_one(case_name, cfg, plot_dir, env, fingerprint=None, eval_script_glob="eval_transformer_*.py",
+             proc_pattern=None):
+    """Run eval_<...> (+ pred_angle_dists on top of it) for one run.
+    fingerprint=None lets the eval script auto-select (best completed, else
     latest in-progress). Returns the fingerprint actually evaluated, or None."""
-    eval_script = glob.glob(os.path.join(plot_dir, "eval_transformer_*.py"))
+    proc_pattern = proc_pattern or cfg.get("proc_pattern")
+    eval_script = glob.glob(os.path.join(plot_dir, eval_script_glob))
     if not eval_script:
-        print(f"  [{case_name}] no eval_transformer script, skipping money/pull/pred-angle plots")
+        print(f"  [{case_name}] no eval script matching '{eval_script_glob}', skipping money/pull/pred-angle plots")
         return None
     eval_script = eval_script[0]
     # CPU if the GPU is busy training (a live run holds the MIG slice); the
     # eval only needs inference on 8 val batches so CPU is tolerable.
     eval_env = dict(env)
-    if find_processes(cfg["proc_pattern"]):
+    if proc_pattern and find_processes(proc_pattern):
         eval_env["CUDA_VISIBLE_DEVICES"] = ""
     cmd = [PYTHON, os.path.basename(eval_script)]
     if fingerprint:
@@ -235,6 +271,10 @@ def regenerate_plots(case_name, cfg, run_eval=True, all_runs=False, incremental=
         print(f"  [{case_name}] no campaign data yet, skipping plots")
         return
 
+    synced = sync_campaign_records(cfg["trained_models_dir"], cfg["records_dest"])
+    if synced:
+        print(f"  [{case_name}] synced {len(synced)} campaign record file(s) into campaign_records/")
+
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = PIXI_LIB + ":" + env.get("LD_LIBRARY_PATH", "")
 
@@ -286,6 +326,116 @@ def regenerate_plots(case_name, cfg, run_eval=True, all_runs=False, incremental=
         eval_one(case_name, cfg, plot_dir, env, fingerprint=None)
 
 
+# ============================================================================
+# Part 2 (ViT, frozen thresholds) / Part 3 (QConv2D, frozen thresholds)
+# ============================================================================
+
+def part23_ckpt_dirs(output_dir, ckpt_prefix):
+    return sorted(
+        glob.glob(os.path.join(output_dir, "**", f"{ckpt_prefix}-*-checkpoints"), recursive=True),
+        key=os.path.getctime)
+
+
+def all_fingerprints_with_checkpoints_part23(output_dir, ckpt_prefix):
+    return [os.path.basename(d).split("-")[1] for d in part23_ckpt_dirs(output_dir, ckpt_prefix)]
+
+
+def fingerprint_completed_part23(output_dir, ckpt_prefix, fp):
+    dirs = glob.glob(os.path.join(output_dir, "**", f"{ckpt_prefix}-{fp}-checkpoints"), recursive=True)
+    return bool(dirs) and os.path.exists(os.path.join(dirs[0], "summary.json"))
+
+
+def print_part23_status(case_name, cfg, do_part2=True, do_part3=True):
+    print(f"\n{'-'*70}\n{case_name} -- Part 2/3\n{'-'*70}")
+    rows = [("Part 2 (ViT)", "part2_script", "part2_ckpt_prefix", "part2_output_dir", do_part2),
+            ("Part 3 (QConv2D)", "part3_script", "part3_ckpt_prefix", "part3_output_dir", do_part3)]
+    for label, script_key, prefix_key, out_key, enabled in rows:
+        if not enabled:
+            continue
+        procs = find_processes(cfg[script_key])
+        print(f"{label}: {'RUNNING' if procs else 'not running'}")
+        for p in procs:
+            print(f"  {p[:220]}")
+
+        ckpt_dirs = part23_ckpt_dirs(cfg[out_key], cfg[prefix_key])
+        if not ckpt_dirs:
+            print("  no runs yet")
+            continue
+        for d in ckpt_dirs:
+            fp = os.path.basename(d).split("-")[1]
+            tlog = latest_row_all(os.path.join(d, "training_log.csv"))
+            status = "completed" if os.path.exists(os.path.join(d, "summary.json")) else "in-progress"
+            if tlog:
+                n_epochs, best_val, last_val = tlog
+                print(f"  {fp} ({status}): epoch {n_epochs}, best_val={best_val:.0f}, last_val={last_val:.0f}")
+            else:
+                print(f"  {fp} ({status}): no training_log.csv yet")
+
+
+def regenerate_part23_plots(case_name, cfg, run_eval=True, all_runs=False, incremental=False,
+                             do_part2=True, do_part3=True):
+    env = os.environ.copy()
+    env["LD_LIBRARY_PATH"] = PIXI_LIB + ":" + env.get("LD_LIBRARY_PATH", "")
+
+    rows = [("part2", "part2_script", "part2_ckpt_prefix", "part2_output_dir", "part2_plot_dir",
+              "eval_part2_*.py", do_part2),
+            ("part3", "part3_script", "part3_ckpt_prefix", "part3_output_dir", "part3_plot_dir",
+              "eval_part3_*.py", do_part3)]
+    for part, script_key, prefix_key, out_key, plot_key, eval_glob, enabled in rows:
+        if not enabled:
+            continue
+        plot_dir = cfg[plot_key]
+        if not os.path.isdir(plot_dir):
+            continue
+        if not part23_ckpt_dirs(cfg[out_key], cfg[prefix_key]):
+            print(f"  [{case_name}/{part}] no runs yet, skipping plots")
+            continue
+
+        # cheap campaign-level plots: losses + mdmm state (CSV-only)
+        scripts = sorted(glob.glob(os.path.join(plot_dir, "plot_run_losses_*.py")) +
+                         glob.glob(os.path.join(plot_dir, "plot_mdmm_state_*.py")))
+        for script in scripts:
+            result = subprocess.run([PYTHON, os.path.basename(script)],
+                                     cwd=plot_dir, env=env, capture_output=True, text=True)
+            tag = os.path.basename(script)
+            if result.returncode == 0:
+                out_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "ok"
+                print(f"  [{case_name}/{part}] {tag}: {out_line}")
+            else:
+                print(f"  [{case_name}/{part}] {tag}: FAILED\n{result.stderr.strip()[-500:]}")
+
+        if not run_eval:
+            continue
+
+        proc_pattern = cfg[script_key]
+        if all_runs or incremental:
+            fps = all_fingerprints_with_checkpoints_part23(cfg[out_key], cfg[prefix_key])
+            if not fps:
+                continue
+            if incremental:
+                to_eval = []
+                for fp in fps:
+                    already_done = (fingerprint_completed_part23(cfg[out_key], cfg[prefix_key], fp) and
+                                     os.path.exists(os.path.join(plot_dir, fp, "predictions.csv")))
+                    if not already_done:
+                        to_eval.append(fp)
+                skipped = len(fps) - len(to_eval)
+                if skipped:
+                    print(f"  [{case_name}/{part}] skipping {skipped} already-evaluated run(s)")
+                if not to_eval:
+                    print(f"  [{case_name}/{part}] nothing new to evaluate")
+                    continue
+            else:
+                to_eval = fps
+            print(f"  [{case_name}/{part}] evaluating {len(to_eval)} run(s): {to_eval}")
+            for fp in to_eval:
+                eval_one(case_name, cfg, plot_dir, env, fingerprint=fp,
+                         eval_script_glob=eval_glob, proc_pattern=proc_pattern)
+        else:
+            eval_one(case_name, cfg, plot_dir, env, fingerprint=None,
+                     eval_script_glob=eval_glob, proc_pattern=proc_pattern)
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     run_eval = "--no-eval" not in sys.argv[1:]
@@ -297,6 +447,14 @@ def main():
     if (all_runs or incremental) and not run_eval:
         print("--no-eval means nothing to evaluate; ignoring --all-runs/--incremental.")
         all_runs = incremental = False
+
+    # --part1/--part2/--part3: select which part(s) to cover. None given = all
+    # three (backward-compatible default).
+    part_flags = {"--part1", "--part2", "--part3"} & set(sys.argv[1:])
+    do_part1 = not part_flags or "--part1" in part_flags
+    do_part2 = not part_flags or "--part2" in part_flags
+    do_part3 = not part_flags or "--part3" in part_flags
+
     which = args[0] if args else "all"
     cases = CASES.keys() if which == "all" else [which]
 
@@ -304,7 +462,10 @@ def main():
         if case_name not in CASES:
             print(f"Unknown case '{case_name}'; choices: {list(CASES)} or 'all'")
             continue
-        print_status(case_name, CASES[case_name])
+        if do_part1:
+            print_status(case_name, CASES[case_name])
+        if case_name in PART23_CASES and (do_part2 or do_part3):
+            print_part23_status(case_name, PART23_CASES[case_name], do_part2=do_part2, do_part3=do_part3)
 
     if not run_eval:
         mode = " (campaign-level only, --no-eval)"
@@ -318,7 +479,12 @@ def main():
     for case_name in cases:
         if case_name not in CASES:
             continue
-        regenerate_plots(case_name, CASES[case_name], run_eval=run_eval, all_runs=all_runs, incremental=incremental)
+        if do_part1:
+            regenerate_plots(case_name, CASES[case_name], run_eval=run_eval, all_runs=all_runs, incremental=incremental)
+        if case_name in PART23_CASES and (do_part2 or do_part3):
+            regenerate_part23_plots(case_name, PART23_CASES[case_name],
+                                     run_eval=run_eval, all_runs=all_runs, incremental=incremental,
+                                     do_part2=do_part2, do_part3=do_part3)
 
 
 if __name__ == "__main__":

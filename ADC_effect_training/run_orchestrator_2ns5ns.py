@@ -1,7 +1,7 @@
 """
 Orchestrator for 2ns/5ns threshold search.
 No TF imports — the subprocess gets the full GPU memory budget (no CUDA context leak).
-Calls train_loop_rnd_thr_noise_corr_contained_2ns5ns.py --seed X --run_index Y per run.
+Calls train_vit_part1_rnd_thr_noise_corr_contained_2ns5ns.py --seed X --run_index Y per run.
 """
 
 import os
@@ -38,7 +38,7 @@ MEDIAN_PATH = os.path.join(
 )
 TRAINING_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "train_loop_rnd_thr_noise_corr_contained_2ns5ns.py",
+    "train_vit_part1_rnd_thr_noise_corr_contained_2ns5ns.py",
 )
 PYTHON = sys.executable
 

@@ -7,7 +7,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from DG.OptimizedDataGenerator_v2p5 import OptimizedDataGenerator
+from DG.OptimizedDataGenerator_v3 import OptimizedDataGenerator
 
 dataset_base_dir = '/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d'
 

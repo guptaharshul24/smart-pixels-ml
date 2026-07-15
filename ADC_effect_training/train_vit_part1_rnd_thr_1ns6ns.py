@@ -11,6 +11,7 @@ from keras.callbacks import CSVLogger
 import os
 import sys
 import random
+import json
 from datetime import datetime
 import logging
 import csv
@@ -25,7 +26,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("runLOG.txt"),
+        logging.FileHandler("runLOG_rnd_thr.txt"),
         logging.StreamHandler()
     ]
 )
@@ -36,7 +37,7 @@ maxval=1e9
 minval=1e-9
 
 # %%
-from DG.OptimizedDataGenerator_v2p5 import OptimizedDataGenerator
+from DG.OptimizedDataGenerator_v3 import OptimizedDataGenerator
 from losses.loss import custom_loss
 from models.SoftQuantizeLayer import SoftQuantizeLayer
 from models.AnnealingScheduler import AnnealingScheduler
@@ -93,13 +94,13 @@ def transformer_encoder(inputs,
                                 dropout=dropout)(x, x)
   x = layers.Dropout(dropout)(x)
   res = x + inputs
-  
+
   x = layers.LayerNormalization(epsilon=1e-6)(res)
   x = layers.Dense(ff_dim, activation="relu")(x)
   x = layers.Dropout(dropout)(x)
   x = layers.Dense(inputs.shape[-1], activation="linear")(x)
   x = layers.Dropout(dropout)(x)
-  
+
   return x + res
 
 def sample_thresholds(seed, low, high, num_thresholds):
@@ -167,6 +168,38 @@ logging.info(f"Validation TFRecords directory: {tfrecords_dir_val}")
 
 os.makedirs(tfrecords_dir_train, exist_ok=True)
 os.makedirs(tfrecords_dir_val, exist_ok=True)
+
+# %%
+# --- RUN COUNT, RESUMABILITY, AND STUCK-RUN HANDLING (mirrors train_loop_part1_3srb.py) ---
+# Same seed-list formula as das214's Part-1 script (42, 1042, 2042, ...): fixed/deterministic
+# so done_seeds-based resumability works across restarts. We use 1000-epoch full training runs
+# (vs their 300-epoch threshold-collection runs), so fewer total runs needed: 10 instead of 25.
+TARGET_RUNS = 10
+SEEDS = [42 + 1000 * i for i in range(40)]
+TIME_STAMPS = [5, 30]
+STUCK_THRESHOLD = 1e5
+STUCK_PATIENCE = 20
+ESCAPE_BELOW = 5e4
+
+trained_models_dir = os.path.join(dataset_base_dir, "trained_models_1_6")
+os.makedirs(trained_models_dir, exist_ok=True)
+threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr.jsonl")
+median_thresholds_path = os.path.join(trained_models_dir, "median_thresholds_rnd_thr.json")
+
+
+def load_collected():
+    if not os.path.exists(threshold_runs_path):
+        return []
+    return [json.loads(l) for l in open(threshold_runs_path) if l.strip()]
+
+
+def running_median():
+    rows = [r for r in load_collected() if not r.get("stuck", False)]
+    if not rows:
+        return None, 0
+    arr = np.array([r["final_thresholds"] for r in rows])
+    return np.median(arr, axis=0).tolist(), len(rows)
+
 
 # %%
 class SoftQuantizeLoggerCallback(tf.keras.callbacks.Callback):
@@ -254,12 +287,12 @@ class AbortOnStuck(tf.keras.callbacks.Callback):
             self.bad = 0
 
 
-def main(seed):
+def main(seed, run_index):
     # Set all random seeds for reproducibility for this specific run
     tf.random.set_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
-    
+
     fingerprint = '%08x' % random.randrange(16**8)
     timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     logging.info(f"--- Starting new training run with SEED: {seed} ---")
@@ -268,13 +301,14 @@ def main(seed):
 
     num_thresholds = 3
     threshold_offset = 0.0
-    # thr_low, thr_high = threshold_offset, 2200.0
-    # random_thresholds = sample_thresholds(seed, thr_low, thr_high, num_thresholds)
-    random_thresholds = [35.0, 60.0, 150.0]
+    # Random initial thresholds (sampled per-run, per-seed) -- lands around [35, 60, 150]
+    # threshold_offset stays 0.0 (SoftQuantize lower wall), independent of the sampling range
+    sample_low, sample_high = 12.0, 160.0
+    random_thresholds = sample_thresholds(seed, sample_low, sample_high, num_thresholds)
     thr_low, thr_high = min(random_thresholds), max(random_thresholds)
-    logging.info(f"Initial thresholds (fixed): {random_thresholds}")
+    logging.info(f"Initial thresholds (random, sampled in [{sample_low}, {sample_high}]): {random_thresholds}")
 
-    
+
     # --- MODEL CREATION AND COMPILATION (MOVED INSIDE MAIN) ---
     logging.info("Creating Vision Transformer (ViT) model...")
     model_params = {
@@ -324,26 +358,6 @@ def main(seed):
     checkpoints_dir = os.path.join(base_dir, 'checkpoints')
     os.makedirs(checkpoints_dir, exist_ok=True)
 
-    # --- RUN METADATA LOG ---
-    runs_log_path = os.path.join(os.path.dirname(os.path.dirname(base_dir)), 'runs_log.csv')
-    run_info = {
-        'timestamp': timestamp,
-        'fingerprint': fingerprint,
-        'seed': seed,
-        'threshold_offset': threshold_offset,
-        'initial_thresholds': random_thresholds,
-        'thr_low': thr_low,
-        'thr_high': thr_high,
-        'checkpoint_dir': base_dir,
-    }
-    write_header = not os.path.exists(runs_log_path)
-    with open(runs_log_path, "a", newline="") as f:
-        writer = csv.writer(f)
-        if write_header:
-            writer.writerow(run_info.keys())
-        writer.writerow(run_info.values())
-    logging.info(f"Run metadata appended to: {runs_log_path}")
-
     checkpoint_filepath = os.path.join(checkpoints_dir, 'weights.{epoch:02d}-t{loss:.2f}-v{val_loss:.2f}.weights.h5')
     logging.info(f"Checkpoints will be saved to: {checkpoint_filepath}")
 
@@ -369,13 +383,13 @@ def main(seed):
         layer_name="soft_quantizer_output"
     )
     logging.info(f"SoftQuantizeLayer state will be logged to: {quantizer_log_path}")
-    abort_bad = AbortOnStuck(threshold=1e5, patience=5)
-    
-    all_callbacks = [mcp, csv_logger, scheduler_callback, quantizer_logger, abort_bad]    
+    abort_bad = AbortOnStuck(threshold=STUCK_THRESHOLD, patience=STUCK_PATIENCE)
+
+    all_callbacks = [mcp, csv_logger, scheduler_callback, quantizer_logger, abort_bad]
 
     # --- MODEL TRAINING ---
     logging.info("--- Starting model.fit() ---")
-    model.fit(
+    history = model.fit(
             x=training_generator,
             validation_data=validation_generator,
             callbacks=all_callbacks,
@@ -384,6 +398,52 @@ def main(seed):
             verbose=1
         )
     logging.info("--- Model training finished for this run ---")
+
+    # --- THRESHOLD COLLECTION (mirrors train_loop_part1_3srb.py's threshold_runs.jsonl) ---
+    val_losses = history.history.get("val_loss", [np.inf])
+    best_val_loss = float(min(val_losses))
+    epochs_run = len(val_losses)
+    stuck = best_val_loss >= ESCAPE_BELOW
+
+    final_thresholds, final_levels = None, None
+    try:
+        with open(quantizer_log_path) as f:
+            rows = list(csv.DictReader(f))
+        if rows:
+            last = rows[-1]
+            final_thresholds = [float(last[f"threshold_{i}"]) for i in range(num_thresholds)]
+            final_levels = [float(last[f"level_{i}"]) for i in range(len(random_thresholds) + 1)]
+    except Exception as e:
+        logging.warning(f"Could not read final thresholds/levels from {quantizer_log_path}: {e}")
+
+    rec = {
+        "run_index": run_index,
+        "seed": seed,
+        "fingerprint": fingerprint,
+        "timestamp": timestamp,
+        "threshold_offset": threshold_offset,
+        "init_thresholds": random_thresholds,
+        "thr_low": thr_low,
+        "thr_high": thr_high,
+        "final_thresholds": final_thresholds,
+        "final_levels": final_levels,
+        "best_val_loss": best_val_loss,
+        "epochs_run": epochs_run,
+        "stuck": stuck,
+        "time_stamps": TIME_STAMPS,
+        "checkpoint_dir": base_dir,
+    }
+    with open(threshold_runs_path, "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    logging.info(f"Run record appended to: {threshold_runs_path} -> {rec}")
+
+    if stuck:
+        logging.info(f"[run seed={seed}] STUCK (epochs={epochs_run}, best_val={best_val_loss:.1f})")
+    else:
+        med, n = running_median()
+        logging.info(f"[run seed={seed}] escaped (best_val={best_val_loss:.1f}); running median over {n} runs = {med}")
+
+    return stuck
 
 if __name__ == "__main__":
     logging.info("Script invoked directly. Starting main execution loop.")
@@ -398,18 +458,40 @@ if __name__ == "__main__":
     #         logging.info("Retrying in 5 seconds...")
     #         time.sleep(5)
 
-    num_runs = 5
-    completed_runs = 0
-    while completed_runs < num_runs:
+    # Resumable, fixed-seed-list run loop (mirrors train_loop_part1_3srb.py):
+    # only non-stuck ("escaped") runs count toward TARGET_RUNS; seeds already present
+    # in threshold_runs_rnd_thr.jsonl are skipped on restart.
+    done_seeds = {r["seed"] for r in load_collected()}
+    completed_runs = sum(1 for r in load_collected() if not r.get("stuck", False))
+    if done_seeds:
+        logging.info(f"Resuming: {len(done_seeds)} seed(s) already attempted, "
+                      f"{completed_runs} completed (non-stuck) run(s).")
+
+    for run_index, run_seed in enumerate(SEEDS):
+        if completed_runs >= TARGET_RUNS:
+            break
+        if run_seed in done_seeds:
+            continue
         try:
-            # Generate a new random seed for each full run attempt
-            run_seed = random.randint(0, 2**32 - 1)
-            main(seed=run_seed)
-            completed_runs += 1
-            logging.info(f"--- Completed run {completed_runs}/{num_runs} ---")
+            stuck = main(seed=run_seed, run_index=run_index)
+            if not stuck:
+                completed_runs += 1
+            logging.info(f"--- Completed run {completed_runs}/{TARGET_RUNS} "
+                          f"(run_index={run_index}, seed={run_seed}, stuck={stuck}) ---")
         except Exception as e:
-            logging.error(f"An exception occurred in main execution: {e}", exc_info=True)
-            logging.info("Retrying in 5 seconds...")
+            logging.error(f"An exception occurred in main execution "
+                           f"(run_index={run_index}, seed={run_seed}): {e}", exc_info=True)
+            logging.info("Continuing with next seed...")
             time.sleep(5)
 
-    logging.info("--- Training script completed successfully ---")
+    med, n = running_median()
+    summary = {
+        "n_runs": n,
+        "median_thresholds": med,
+        "levels": [0.0, 1.0, 2.0, 3.0],
+        "time_stamps": TIME_STAMPS,
+        "note": "median over non-stuck runs; per-run details in threshold_runs_rnd_thr.jsonl",
+    }
+    with open(median_thresholds_path, "w") as f:
+        json.dump(summary, f, indent=1)
+    logging.info(f"--- Training script completed: {n} runs, median thresholds={med} ---")
