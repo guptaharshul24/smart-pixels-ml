@@ -1,0 +1,19 @@
+{
+ "n_runs": 5,
+ "median_thresholds": [
+  13.975048,
+  30.61203,
+  71.9303
+ ],
+ "levels": [
+  0.0,
+  1.0,
+  2.0,
+  3.0
+ ],
+ "time_stamps": [
+  5,
+  30
+ ],
+ "note": "median over non-stuck runs; per-run details in threshold_runs_rnd_thr_noise.jsonl"
+}

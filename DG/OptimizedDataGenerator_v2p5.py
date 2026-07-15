@@ -325,7 +325,10 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
         x = df[recon_cols].values
         
         if noise != -1:
-            bkg = np.random.normal(*noise, x.shape)
+            # Stats-only pass (mean/std/percentiles for `standardize()`, unused when
+            # to_standardize=False) -- plain i.i.d. noise is fine here, correlation
+            # between time slices only matters for the actual data in prepare_batch_data().
+            bkg = np.random.normal(noise[0], noise[1], x.shape)
             x = x+bkg
         if min_threshold is not None:
             bellowthresh = x < min_threshold
@@ -359,6 +362,32 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
         gc.collect()
         
         return amean, avariance, amin, amax, len_adf, labels_scale, pos_scale, neg_scale
+
+    def _sample_noise(self, shape):
+        """
+        Samples gaussian noise for `recon_values` (shape = (n_samples, n_time*len_xy),
+        columns ordered by time slice per `use_time_stamps`, see __init__).
+        `self.noise = [mu, sigma]` -> i.i.d. N(mu, sigma) everywhere (old behavior).
+        `self.noise = [mu, sigma, rho]` -> only the first time slice's noise is drawn
+        independently, n_1 ~ N(mu, sigma); every subsequent slice is correlated with
+        the immediately preceding one (ADC/CSA bandwidth-limited noise is a Markov
+        process in time): n_i = mu + rho*(n_{i-1}-mu) + sqrt(1-rho^2)*N(0, sigma).
+        `rho = exp(-dt_slice/tau)`, `tau = 1/(2*pi*fc)`, assumes uniform spacing
+        between consecutive `use_time_stamps` (single scalar rho for all gaps).
+        """
+        mu, sigma = self.noise[0], self.noise[1]
+        n_time = self.input_shape[0]
+        if len(self.noise) < 3:
+            return np.random.normal(mu, sigma, shape)
+
+        rho = self.noise[2]
+        len_xy = shape[1] // n_time
+        slices = [np.random.normal(mu, sigma, (shape[0], len_xy))]  # first slice: purely random
+        for _ in range(1, n_time):
+            prev = slices[-1]
+            nxt = mu + rho * (prev - mu) + np.sqrt(1 - rho**2) * np.random.normal(0.0, sigma, (shape[0], len_xy))
+            slices.append(nxt)
+        return np.concatenate(slices, axis=1)
 
     def standardize(self, x):
         """
@@ -547,7 +576,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
 
                 recon_values = recon_df.values
                 if self.noise !=-1:
-                    bkg = np.random.normal(*self.noise, recon_values.shape)
+                    bkg = self._sample_noise(recon_values.shape)
                     recon_values = recon_values + bkg
                 if self.min_threshold is not None: 
                     bellowthresh = recon_values < self.min_threshold

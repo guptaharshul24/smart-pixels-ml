@@ -1,0 +1,5 @@
+run 49026675 (MDMM correlation-constraint 1e4 + corr noise + contained + 2ns/5ns), checkpoint weights.3447-t-41032.85-v-38665.73.weights.h5
+x    : residual mean = +0.3124, std = 7.0742  (scale 123.6133)
+y    : residual mean = -0.0187, std = 2.0735  (scale 31.0050)
+cotA : residual mean = +0.0104, std = 0.3242  (scale 6.5124)
+cotB : residual mean = -0.0055, std = 0.1739  (scale 1.8465)

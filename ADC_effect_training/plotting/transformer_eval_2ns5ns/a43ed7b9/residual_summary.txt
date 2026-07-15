@@ -1,0 +1,5 @@
+run a43ed7b9 (corr noise + contained + 2ns/5ns), checkpoint weights.4850-t-40675.98-v-37832.84.weights.h5
+x    : residual mean = +0.1220, std = 7.0539  (scale 123.6133)
+y    : residual mean = -0.1570, std = 2.0238  (scale 31.0050)
+cotA : residual mean = +0.0230, std = 0.3175  (scale 6.5124)
+cotB : residual mean = +0.0011, std = 0.1702  (scale 1.8465)

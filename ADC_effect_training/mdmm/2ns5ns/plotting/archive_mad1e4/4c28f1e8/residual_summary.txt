@@ -1,0 +1,5 @@
+run 4c28f1e8 (MDMM MAD-constraint 1e4 + corr noise + contained + 2ns/5ns), checkpoint weights.4321-t-28819.77-v-25873.75.weights.h5
+x    : residual mean = +0.2036, std = 7.3081  (scale 123.6133)
+y    : residual mean = +0.1000, std = 2.1407  (scale 31.0050)
+cotA : residual mean = -4.5367, std = 35.5209  (scale 6.5124)
+cotB : residual mean = -1.1726, std = 8.9613  (scale 1.8465)

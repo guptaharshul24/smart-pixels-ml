@@ -41,3 +41,7 @@ venv/
 runLOG*.txt
 *.out
 *.err
+
+# Ignore generated plots/animations -- reproducible from the .py scripts that make them
+*.png
+*.gif
