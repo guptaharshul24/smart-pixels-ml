@@ -3,26 +3,26 @@
 One-stop status + plotting for the MDMM correlation-constraint (corr1e4) campaigns.
 
 Usage:
-    /home/harshul-cern/work/pixi/global/.pixi/envs/default/bin/python status_and_plot.py [1ns6ns|2ns5ns|all] [--no-eval|--all-runs|--incremental] [--part1] [--part2] [--part3]
+    /home/harshul-cern/work/pixi/global/.pixi/envs/default/bin/python status_and_plot.py [1ns6ns|2ns5ns|all] [--no-eval|--all-runs|--incremental] [--part1] [--part1p5] [--part2p5]
 
 Default (no arg) = all. Read-only on the training processes; only writes new
-PNGs into plotting/corr1e4/ (Part 1) or plotting/part2//part3/ (Part 2/3).
+PNGs into plotting/corr1e4/ (Part 1) or plotting/part1p5/ or plotting/part2p5/ (Part 1.5/2.5).
 Safe to run anytime, including mid-training.
 
 --no-eval: campaign-level plots only (thresholds/losses/mdmm-state), skip
   per-fingerprint eval entirely (fastest).
 --all-runs: force-evaluate every run with a checkpoint, every time (slowest,
   no caching).
---incremental: evaluate every run with a checkpoint (across Part 1, Part 2,
-  and Part 3 alike), but skip ones that are already completed and already
+--incremental: evaluate every run with a checkpoint (across Part 1, Part 1.5,
+  and Part 2.5 alike), but skip ones that are already completed and already
   have a predictions.csv. Cheap plots (loss/threshold/mdmm-state) always
   regenerate regardless of this flag -- only the expensive per-fingerprint
   eval is cached.
 (no flag): only evaluate the single best-completed/latest-in-progress run,
   per part.
 
---part1 / --part2 / --part3: restrict to one or more parts (combine freely,
-  e.g. --part2 --part3 to skip Part 1 entirely). No part flag given = all
+--part1 / --part1p5 / --part2p5: restrict to one or more parts (combine freely,
+  e.g. --part1p5 --part2p5 to skip Part 1 entirely). No part flag given = all
   three (default, backward-compatible).
 
 For each case, prints:
@@ -79,21 +79,21 @@ CASES = {
 
 ADC_ROOT = os.path.dirname(MDMM_ROOT)
 
-# Part 2 (ViT, frozen thresholds) / Part 3 (QConv2D, frozen thresholds) -- both
+# Part 1.5 (ViT, frozen thresholds) / Part 2.5 (QConv2D, frozen thresholds) -- both
 # trained on campaign 4's median, both single-run-with-retry (no multi-run
 # journal/median the way Part 1 campaigns have). Only 2ns5ns exists so far.
-PART23_CASES = {
+PART1P5_2P5_CASES = {
     "2ns5ns": {
-        "part2_script": "train_vit_part2_noise_corr_contained_2ns5ns_mdmm_corr1e4.py",
-        "part3_script": "train_qconv2d_part3_noise_corr_contained_2ns5ns_mdmm_corr1e4.py",
-        "part2_output_dir": os.path.join(
-            DATASET_BASE, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part2_vit"),
-        "part3_output_dir": os.path.join(
-            DATASET_BASE, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part3_qconv2d"),
-        "part2_ckpt_prefix": "Transformer_model",
-        "part3_ckpt_prefix": "QConv2D_model",
-        "part2_plot_dir": os.path.join(ADC_ROOT, "plotting", "part2"),
-        "part3_plot_dir": os.path.join(ADC_ROOT, "plotting", "part3"),
+        "part1p5_script": "train_vit_part1p5_noise_corr_contained_2ns5ns_mdmm_corr1e4.py",
+        "part2p5_script": "train_qconv2d_part2p5_noise_corr_contained_2ns5ns_mdmm_corr1e4.py",
+        "part1p5_output_dir": os.path.join(
+            DATASET_BASE, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part1p5_vit"),
+        "part2p5_output_dir": os.path.join(
+            DATASET_BASE, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part2p5_qconv2d"),
+        "part1p5_ckpt_prefix": "Transformer_model",
+        "part2p5_ckpt_prefix": "QConv2D_model",
+        "part1p5_plot_dir": os.path.join(ADC_ROOT, "plotting", "part1p5"),
+        "part2p5_plot_dir": os.path.join(ADC_ROOT, "plotting", "part2p5"),
     },
 }
 
@@ -327,28 +327,28 @@ def regenerate_plots(case_name, cfg, run_eval=True, all_runs=False, incremental=
 
 
 # ============================================================================
-# Part 2 (ViT, frozen thresholds) / Part 3 (QConv2D, frozen thresholds)
+# Part 1.5 (ViT, frozen thresholds) / Part 2.5 (QConv2D, frozen thresholds)
 # ============================================================================
 
-def part23_ckpt_dirs(output_dir, ckpt_prefix):
+def part1p5_3_ckpt_dirs(output_dir, ckpt_prefix):
     return sorted(
         glob.glob(os.path.join(output_dir, "**", f"{ckpt_prefix}-*-checkpoints"), recursive=True),
         key=os.path.getctime)
 
 
-def all_fingerprints_with_checkpoints_part23(output_dir, ckpt_prefix):
-    return [os.path.basename(d).split("-")[1] for d in part23_ckpt_dirs(output_dir, ckpt_prefix)]
+def all_fingerprints_with_checkpoints_part1p5_3(output_dir, ckpt_prefix):
+    return [os.path.basename(d).split("-")[1] for d in part1p5_3_ckpt_dirs(output_dir, ckpt_prefix)]
 
 
-def fingerprint_completed_part23(output_dir, ckpt_prefix, fp):
+def fingerprint_completed_part1p5_3(output_dir, ckpt_prefix, fp):
     dirs = glob.glob(os.path.join(output_dir, "**", f"{ckpt_prefix}-{fp}-checkpoints"), recursive=True)
     return bool(dirs) and os.path.exists(os.path.join(dirs[0], "summary.json"))
 
 
-def print_part23_status(case_name, cfg, do_part2=True, do_part3=True):
-    print(f"\n{'-'*70}\n{case_name} -- Part 2/3\n{'-'*70}")
-    rows = [("Part 2 (ViT)", "part2_script", "part2_ckpt_prefix", "part2_output_dir", do_part2),
-            ("Part 3 (QConv2D)", "part3_script", "part3_ckpt_prefix", "part3_output_dir", do_part3)]
+def print_part1p5_2p5_status(case_name, cfg, do_part1p5=True, do_part2p5=True):
+    print(f"\n{'-'*70}\n{case_name} -- Part 1.5/2.5\n{'-'*70}")
+    rows = [("Part 1.5 (ViT)", "part1p5_script", "part1p5_ckpt_prefix", "part1p5_output_dir", do_part1p5),
+            ("Part 2.5 (QConv2D)", "part2p5_script", "part2p5_ckpt_prefix", "part2p5_output_dir", do_part2p5)]
     for label, script_key, prefix_key, out_key, enabled in rows:
         if not enabled:
             continue
@@ -357,7 +357,7 @@ def print_part23_status(case_name, cfg, do_part2=True, do_part3=True):
         for p in procs:
             print(f"  {p[:220]}")
 
-        ckpt_dirs = part23_ckpt_dirs(cfg[out_key], cfg[prefix_key])
+        ckpt_dirs = part1p5_3_ckpt_dirs(cfg[out_key], cfg[prefix_key])
         if not ckpt_dirs:
             print("  no runs yet")
             continue
@@ -372,22 +372,22 @@ def print_part23_status(case_name, cfg, do_part2=True, do_part3=True):
                 print(f"  {fp} ({status}): no training_log.csv yet")
 
 
-def regenerate_part23_plots(case_name, cfg, run_eval=True, all_runs=False, incremental=False,
-                             do_part2=True, do_part3=True):
+def regenerate_part1p5_2p5_plots(case_name, cfg, run_eval=True, all_runs=False, incremental=False,
+                             do_part1p5=True, do_part2p5=True):
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = PIXI_LIB + ":" + env.get("LD_LIBRARY_PATH", "")
 
-    rows = [("part2", "part2_script", "part2_ckpt_prefix", "part2_output_dir", "part2_plot_dir",
-              "eval_part2_*.py", do_part2),
-            ("part3", "part3_script", "part3_ckpt_prefix", "part3_output_dir", "part3_plot_dir",
-              "eval_part3_*.py", do_part3)]
+    rows = [("part1p5", "part1p5_script", "part1p5_ckpt_prefix", "part1p5_output_dir", "part1p5_plot_dir",
+              "eval_part1p5_*.py", do_part1p5),
+            ("part2p5", "part2p5_script", "part2p5_ckpt_prefix", "part2p5_output_dir", "part2p5_plot_dir",
+              "eval_part2p5_*.py", do_part2p5)]
     for part, script_key, prefix_key, out_key, plot_key, eval_glob, enabled in rows:
         if not enabled:
             continue
         plot_dir = cfg[plot_key]
         if not os.path.isdir(plot_dir):
             continue
-        if not part23_ckpt_dirs(cfg[out_key], cfg[prefix_key]):
+        if not part1p5_3_ckpt_dirs(cfg[out_key], cfg[prefix_key]):
             print(f"  [{case_name}/{part}] no runs yet, skipping plots")
             continue
 
@@ -409,13 +409,13 @@ def regenerate_part23_plots(case_name, cfg, run_eval=True, all_runs=False, incre
 
         proc_pattern = cfg[script_key]
         if all_runs or incremental:
-            fps = all_fingerprints_with_checkpoints_part23(cfg[out_key], cfg[prefix_key])
+            fps = all_fingerprints_with_checkpoints_part1p5_3(cfg[out_key], cfg[prefix_key])
             if not fps:
                 continue
             if incremental:
                 to_eval = []
                 for fp in fps:
-                    already_done = (fingerprint_completed_part23(cfg[out_key], cfg[prefix_key], fp) and
+                    already_done = (fingerprint_completed_part1p5_3(cfg[out_key], cfg[prefix_key], fp) and
                                      os.path.exists(os.path.join(plot_dir, fp, "predictions.csv")))
                     if not already_done:
                         to_eval.append(fp)
@@ -448,12 +448,12 @@ def main():
         print("--no-eval means nothing to evaluate; ignoring --all-runs/--incremental.")
         all_runs = incremental = False
 
-    # --part1/--part2/--part3: select which part(s) to cover. None given = all
+    # --part1/--part1p5/--part2p5: select which part(s) to cover. None given = all
     # three (backward-compatible default).
-    part_flags = {"--part1", "--part2", "--part3"} & set(sys.argv[1:])
+    part_flags = {"--part1", "--part1p5", "--part2p5"} & set(sys.argv[1:])
     do_part1 = not part_flags or "--part1" in part_flags
-    do_part2 = not part_flags or "--part2" in part_flags
-    do_part3 = not part_flags or "--part3" in part_flags
+    do_part1p5 = not part_flags or "--part1p5" in part_flags
+    do_part2p5 = not part_flags or "--part2p5" in part_flags
 
     which = args[0] if args else "all"
     cases = CASES.keys() if which == "all" else [which]
@@ -464,8 +464,8 @@ def main():
             continue
         if do_part1:
             print_status(case_name, CASES[case_name])
-        if case_name in PART23_CASES and (do_part2 or do_part3):
-            print_part23_status(case_name, PART23_CASES[case_name], do_part2=do_part2, do_part3=do_part3)
+        if case_name in PART1P5_2P5_CASES and (do_part1p5 or do_part2p5):
+            print_part1p5_2p5_status(case_name, PART1P5_2P5_CASES[case_name], do_part1p5=do_part1p5, do_part2p5=do_part2p5)
 
     if not run_eval:
         mode = " (campaign-level only, --no-eval)"
@@ -481,10 +481,10 @@ def main():
             continue
         if do_part1:
             regenerate_plots(case_name, CASES[case_name], run_eval=run_eval, all_runs=all_runs, incremental=incremental)
-        if case_name in PART23_CASES and (do_part2 or do_part3):
-            regenerate_part23_plots(case_name, PART23_CASES[case_name],
+        if case_name in PART1P5_2P5_CASES and (do_part1p5 or do_part2p5):
+            regenerate_part1p5_2p5_plots(case_name, PART1P5_2P5_CASES[case_name],
                                      run_eval=run_eval, all_runs=all_runs, incremental=incremental,
-                                     do_part2=do_part2, do_part3=do_part3)
+                                     do_part1p5=do_part1p5, do_part2p5=do_part2p5)
 
 
 if __name__ == "__main__":

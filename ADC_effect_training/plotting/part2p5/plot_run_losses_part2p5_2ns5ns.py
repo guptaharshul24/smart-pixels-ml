@@ -1,7 +1,7 @@
 """
-Train/val loss curves for Part 3 (2ns5ns, QConv2D) runs -- same two-panel
-layout as Part 1/Part 2's loss plots. Thresholds are frozen constants in
-Part 3 (nothing analogous to Part 1's threshold-evolution plot) -- loss is
+Train/val loss curves for Part 2.5 (2ns5ns, QConv2D) runs -- same two-panel
+layout as Part 1/Part 1.5's loss plots. Thresholds are frozen constants in
+Part 2.5 (nothing analogous to Part 1's threshold-evolution plot) -- loss is
 the only per-epoch trajectory worth tracking here. "loss_obj" (pure NLL,
 present on MDMM runs) is plotted instead of "loss" (NLL + constraint
 penalties) when present, so curves stay comparable across MDMM and
@@ -10,7 +10,7 @@ summary.json, only written on completion) so in-progress runs show up.
 
 Only plots MDMM runs -- the pre-MDMM stalled attempt (fp 61e72f40, killed
 before MDMM was added) is excluded rather than shown alongside real runs.
-Every Part 3 run from here on uses MDMM, so this filter naturally stays
+Every Part 2.5 run from here on uses MDMM, so this filter naturally stays
 correct without needing to track excluded fingerprints.
 """
 import os
@@ -21,14 +21,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d"
-part3_output_dir = os.path.join(
-    dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part3_qconv2d")
+part2p5_output_dir = os.path.join(
+    dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part2p5_qconv2d")
 out = os.path.dirname(os.path.abspath(__file__))
 
-log_paths = glob.glob(os.path.join(part3_output_dir, "**", "QConv2D_model-*-checkpoints",
+log_paths = glob.glob(os.path.join(part2p5_output_dir, "**", "QConv2D_model-*-checkpoints",
                                     "training_log.csv"), recursive=True)
 if not log_paths:
-    raise SystemExit(f"No Part 3 training_log.csv found under {part3_output_dir}")
+    raise SystemExit(f"No Part 2.5 training_log.csv found under {part2p5_output_dir}")
 
 colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -49,10 +49,10 @@ for i, log_path in enumerate(sorted(log_paths, key=os.path.getctime)):
     axes[1].plot(epochs, val_losses, label=tag, color=color)
 
 if not plotted_any:
-    raise SystemExit("No MDMM runs found under Part 3 output dir yet.")
+    raise SystemExit("No MDMM runs found under Part 2.5 output dir yet.")
 
-axes[0].set_title("Training loss_obj / NLL (Part 3, QConv2D, frozen hard-digitized thresholds, 2ns/5ns)")
-axes[1].set_title("Validation loss / NLL (Part 3, QConv2D, frozen hard-digitized thresholds, 2ns/5ns)")
+axes[0].set_title("Training loss_obj / NLL (Part 2.5, QConv2D, frozen hard-digitized thresholds, 2ns/5ns)")
+axes[1].set_title("Validation loss / NLL (Part 2.5, QConv2D, frozen hard-digitized thresholds, 2ns/5ns)")
 for ax in axes:
     ax.set_xlabel("epoch")
     ax.set_ylabel("loss")
@@ -60,6 +60,6 @@ for ax in axes:
     ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
-out_path = os.path.join(out, "run_losses_part3_2ns5ns.png")
+out_path = os.path.join(out, "run_losses_part2p5_2ns5ns.png")
 plt.savefig(out_path, dpi=120)
 print(f"saved to {out_path}")

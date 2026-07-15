@@ -1,12 +1,12 @@
 """
-Evaluate a Part 3 (2ns5ns) QConv2D run: residuals, pulls, sigma hists, and
-summary (money) plots. Same pattern as plotting/part2/eval_part2_2ns5ns.py,
+Evaluate a Part 2.5 (2ns5ns) QConv2D run: residuals, pulls, sigma hists, and
+summary (money) plots. Same pattern as plotting/part1p5/eval_part1p5_2ns5ns.py,
 adapted for models.models.CreateModel instead of the ViT.
 
 Note: model.predict() needs run_eagerly=True at compile time -- QKeras's
 QSeparableConv2D quantizer calls .numpy() internally, which raises
 NotImplementedError under graph-mode tracing (same issue documented in
-train_qconv2d_part3_noise_corr_contained_2ns5ns_mdmm_corr1e4.py).
+train_qconv2d_part2p5_noise_corr_contained_2ns5ns_mdmm_corr1e4.py).
 """
 import os
 import sys
@@ -23,8 +23,9 @@ import seaborn as sns
 from scipy.optimize import curve_fit
 
 import tensorflow as tf
+import tensorflow_probability as tfp  # must precede `from qkeras import *` -- see losses.loss import-order note
 
-# repo root: file lives in ADC_effect_training/plotting/part3/, 3 levels down
+# repo root: file lives in ADC_effect_training/plotting/part2p5/, 3 levels down
 repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 sys.path.insert(0, repo_root)
 
@@ -41,10 +42,10 @@ minval = 1e-9
 # ---------------------------------------------------------------- configuration
 dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d"
 campaign4_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm")
-part3_output_dir = os.path.join(campaign4_dir, "part3_qconv2d")
+part2p5_output_dir = os.path.join(campaign4_dir, "part2p5_qconv2d")
 tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained_2ns5ns", "TFR_val")
 out_base = os.path.dirname(os.path.abspath(__file__))
-CASE_TAG = "Part 3 (QConv2D, frozen hard-digitized thresholds, MDMM) 2ns/5ns"
+CASE_TAG = "Part 2.5 (QConv2D, frozen hard-digitized thresholds, MDMM) 2ns/5ns"
 
 # ----------------------------------------------------------- run selection
 parser = argparse.ArgumentParser()
@@ -52,9 +53,9 @@ parser.add_argument('--fingerprint', type=str, default=None,
                     help="evaluate this run instead of the best-NLL one")
 args = parser.parse_args()
 
-summary_paths = glob.glob(os.path.join(part3_output_dir, "**", "summary.json"), recursive=True)
+summary_paths = glob.glob(os.path.join(part2p5_output_dir, "**", "summary.json"), recursive=True)
 if not summary_paths:
-    raise SystemExit(f"No Part 3 summary.json found under {part3_output_dir} -- has a run completed yet?")
+    raise SystemExit(f"No Part 2.5 summary.json found under {part2p5_output_dir} -- has a run completed yet?")
 summaries = [json.load(open(p)) for p in summary_paths]
 if args.fingerprint:
     record = next(r for r in summaries if r["fingerprint"] == args.fingerprint)

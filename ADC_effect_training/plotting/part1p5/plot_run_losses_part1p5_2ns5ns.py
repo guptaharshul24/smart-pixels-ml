@@ -1,8 +1,8 @@
 """
-Train/val loss curves for Part 2 (2ns5ns) runs -- same two-panel layout as
+Train/val loss curves for Part 1.5 (2ns5ns) runs -- same two-panel layout as
 Part 1's plot_run_losses (mdmm/2ns5ns/plotting/corr1e4/plot_run_losses_2ns5ns_mdmm.py):
 left panel = training loss, right panel = validation loss, one line per run/
-attempt in matching color. Thresholds are frozen constants in Part 2 (no
+attempt in matching color. Thresholds are frozen constants in Part 1.5 (no
 SoftQuantizeLayer, nothing analogous to Part 1's threshold-evolution plot) --
 loss is the only per-epoch trajectory worth tracking here. For MDMM runs,
 "loss" in training_log.csv is NLL + constraint penalties -- loss_obj (pure
@@ -12,7 +12,7 @@ summary.json, which is only written on completion) so in-progress runs show up.
 
 Only plots MDMM runs -- the one pre-MDMM run (fp e7ddbec2, angle-collapsed,
 archived to archive_no_mdmm/) is intentionally excluded rather than shown
-alongside healthy runs. Every Part 2 run from here on uses MDMM, so this
+alongside healthy runs. Every Part 1.5 run from here on uses MDMM, so this
 filter naturally stays correct without needing to track excluded fingerprints.
 """
 import os
@@ -23,14 +23,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d"
-part2_output_dir = os.path.join(
-    dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part2_vit")
+part1p5_output_dir = os.path.join(
+    dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part1p5_vit")
 out = os.path.dirname(os.path.abspath(__file__))
 
-log_paths = glob.glob(os.path.join(part2_output_dir, "**", "Transformer_model-*-checkpoints",
+log_paths = glob.glob(os.path.join(part1p5_output_dir, "**", "Transformer_model-*-checkpoints",
                                     "training_log.csv"), recursive=True)
 if not log_paths:
-    raise SystemExit(f"No Part 2 training_log.csv found under {part2_output_dir}")
+    raise SystemExit(f"No Part 1.5 training_log.csv found under {part1p5_output_dir}")
 
 colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -52,10 +52,10 @@ for i, log_path in enumerate(sorted(log_paths, key=os.path.getctime)):
     axes[1].plot(epochs, val_losses, label=tag, color=color)
 
 if not plotted_any:
-    raise SystemExit("No MDMM runs found under Part 2 output dir yet.")
+    raise SystemExit("No MDMM runs found under Part 1.5 output dir yet.")
 
-axes[0].set_title("Training loss_obj / NLL (Part 2, ViT, frozen hard-digitized thresholds, 2ns/5ns)")
-axes[1].set_title("Validation loss / NLL (Part 2, ViT, frozen hard-digitized thresholds, 2ns/5ns)")
+axes[0].set_title("Training loss_obj / NLL (Part 1.5, ViT, frozen hard-digitized thresholds, 2ns/5ns)")
+axes[1].set_title("Validation loss / NLL (Part 1.5, ViT, frozen hard-digitized thresholds, 2ns/5ns)")
 for ax in axes:
     ax.set_xlabel("epoch")
     ax.set_ylabel("loss")
@@ -63,6 +63,6 @@ for ax in axes:
     ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
-out_path = os.path.join(out, "run_losses_part2_2ns5ns.png")
+out_path = os.path.join(out, "run_losses_part1p5_2ns5ns.png")
 plt.savefig(out_path, dpi=120)
 print(f"saved to {out_path}")

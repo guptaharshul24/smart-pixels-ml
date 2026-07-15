@@ -1,8 +1,8 @@
 """
-MDMM constraint-penalty curves for Part 3 (2ns5ns, QConv2D) runs -- the
+MDMM constraint-penalty curves for Part 2.5 (2ns5ns, QConv2D) runs -- the
 analog of Part 1's threshold-evolution plot, but tracking the correlation-
 constraint penalty per parameter instead (thresholds are frozen constants
-in Part 3, nothing to plot there). Reads the pen_corr_x/y/cotA/cotB columns
+in Part 2.5, nothing to plot there). Reads the pen_corr_x/y/cotA/cotB columns
 MDMM's train_step adds to training_log.csv. Runs without MDMM are skipped.
 """
 import os
@@ -13,11 +13,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d"
-part3_output_dir = os.path.join(
-    dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part3_qconv2d")
+part2p5_output_dir = os.path.join(
+    dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part2p5_qconv2d")
 out = os.path.dirname(os.path.abspath(__file__))
 
-log_paths = glob.glob(os.path.join(part3_output_dir, "**", "QConv2D_model-*-checkpoints",
+log_paths = glob.glob(os.path.join(part2p5_output_dir, "**", "QConv2D_model-*-checkpoints",
                                     "training_log.csv"), recursive=True)
 params = ["x", "y", "cotA", "cotB"]
 
@@ -35,7 +35,7 @@ for log_path in sorted(log_paths, key=os.path.getctime):
         ax.plot(epochs, pen, label=fp, alpha=0.8)
 
 if not any_mdmm:
-    raise SystemExit("No MDMM runs found under Part 3 output dir yet (no pen_corr_* "
+    raise SystemExit("No MDMM runs found under Part 2.5 output dir yet (no pen_corr_* "
                       "columns in any training_log.csv).")
 
 for ax, p in zip(axes.flat, params):
@@ -44,8 +44,8 @@ for ax, p in zip(axes.flat, params):
     ax.set_ylabel("penalty (-> 0 once constraint satisfied)")
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8)
-fig.suptitle("Part 3 (QConv2D) 2ns/5ns: MDMM correlation-constraint penalties per parameter")
+fig.suptitle("Part 2.5 (QConv2D) 2ns/5ns: MDMM correlation-constraint penalties per parameter")
 plt.tight_layout()
-out_path = os.path.join(out, "mdmm_state_part3_2ns5ns.png")
+out_path = os.path.join(out, "mdmm_state_part2p5_2ns5ns.png")
 plt.savefig(out_path, dpi=120)
 print(f"saved to {out_path}")

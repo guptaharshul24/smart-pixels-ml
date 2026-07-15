@@ -1,0 +1,5 @@
+run 4e4c3f5a (Part 3 (QConv2D, frozen hard-digitized thresholds, MDMM) 2ns/5ns), checkpoint weights.02-t110308.96-v97154.57.weights.h5
+x    : residual mean = +30.7117, std = 62.0409  (scale 123.6133)
+y    : residual mean = +8.6863, std = 14.2153  (scale 31.0050)
+cotA : residual mean = +0.1848, std = 3.5185  (scale 6.5124)
+cotB : residual mean = -0.0864, std = 0.8603  (scale 1.8465)

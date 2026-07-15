@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wrapper 1 of the Part 2/3 launch chain.
+Wrapper 1 of the Part 1.5/3 launch chain.
 
 Waits for campaign 4's orchestrator process (mdmm/2ns5ns/run_orchestrator_2ns5ns_mdmm.py)
 to actually exit -- polls the real OS process, not a proxy file like the median

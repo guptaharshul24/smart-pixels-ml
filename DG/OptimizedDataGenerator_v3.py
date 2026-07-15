@@ -710,8 +710,35 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
         except StopIteration:
             raise ValueError(f"No data found in TFRecord file: {tfrecord_path}")
 
-        X_batch = tf.reshape(X_batch, [-1, *X_batch.shape[1:]])
-        y_batch = tf.reshape(y_batch, [-1, *y_batch.shape[1:]])
+        # Was `tf.reshape(X_batch, [-1, *X_batch.shape[1:]])` -- a reshape into the
+        # tensor's own shape, meant as a no-op sanity pass. Two failed fix attempts
+        # before this one (both crashed Part 3 for real, see git history/session notes
+        # if this needs revisiting):
+        #   1. Original `.shape[1:]` (Python-level static read): crashed with "Input to
+        #      reshape is a tensor with 2560000 values, but the requested shape has
+        #      20000" -- some call got a stale/wrong static shape baked in, likely
+        #      because this __getitem__ runs under Keras's PyDatasetAdapter via
+        #      tf.data.Dataset.from_generator + autograph, not plain eager Python.
+        #   2. `tf.reshape(X_batch, tf.concat([[-1], tf.shape(X_batch)[1:]], axis=0))`
+        #      (dynamic shape via a real op instead of the static attribute): survived
+        #      longer (a full ~30-epoch attempt) but then crashed differently --
+        #      "generator yielded an element of shape (2560000, 1) where an element of
+        #      shape (None, 16, 16, 2) was expected". A tf.reshape whose target shape is
+        #      itself a *dynamic* tensor (not a Python list of ints) produces an output
+        #      with statically UNKNOWN shape (TensorShape(None)); something downstream
+        #      in Keras/tf.data's output-signature matching mishandled that unknown
+        #      shape and flattened the batch instead.
+        # `tf.ensure_shape` fixes both: its target is a plain Python list evaluated at
+        # trace time (no stale-attribute risk like #1), and -- unlike reshape -- it
+        # *restores* concrete static shape info on its output rather than erasing it
+        # (no unknown-shape risk like #2). It also fails fast with a clear message if a
+        # batch is ever genuinely malformed, instead of a cryptic low-level TF error.
+        # Confirmed via direct inspection: X out of parse_tensor here is channel-LAST
+        # (rows, 16, 16, 2) -- do not use self.input_shape, which stores the
+        # channel-FIRST (2, 16, 16) convention used elsewhere in this file (e.g. the
+        # reconstruction reshape) and is not the on-disk layout for this tensor.
+        X_batch = tf.ensure_shape(X_batch, [None, 16, 16, 2])
+        y_batch = tf.ensure_shape(y_batch, [None, len(self.labels_list)])
 
         if self.quantize:
             X_batch = QKeras_data_prep_quantizer(X_batch, bits=4, int_bits=0, alpha=1)

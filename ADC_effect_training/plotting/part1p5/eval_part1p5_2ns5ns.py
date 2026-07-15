@@ -1,10 +1,10 @@
 """
-Evaluate a Part 2 (2ns5ns) ViT run: residuals, pulls, sigma hists, and
+Evaluate a Part 1.5 (2ns5ns) ViT run: residuals, pulls, sigma hists, and
 summary (money) plots. Adapted from
 mdmm/2ns5ns/plotting/corr1e4/eval_transformer_2ns5ns_mdmm.py -- same plot
-suite, but reads a Part 2 run's summary.json (single run per script
+suite, but reads a Part 1.5 run's summary.json (single run per script
 execution, no threshold_runs_*.jsonl campaign journal to select from) and
-uses the Part 2 model (no SoftQuantizeLayer -- takes hard-digitized input
+uses the Part 1.5 model (no SoftQuantizeLayer -- takes hard-digitized input
 directly) + OptimizedDataGenerator_v3's digitize=True path instead of the
 soft quantizer.
 """
@@ -26,7 +26,7 @@ import tensorflow as tf
 from tensorflow.keras import layers
 import keras
 
-# repo root: file lives in ADC_effect_training/plotting/part2/, 3 levels down
+# repo root: file lives in ADC_effect_training/plotting/part1p5/, 3 levels down
 repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 sys.path.insert(0, repo_root)
 
@@ -43,10 +43,10 @@ dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x
 campaign4_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm")
 median_thresholds_path = os.path.join(
     campaign4_dir, "median_thresholds_rnd_thr_noise_corr_contained_2ns5ns_mdmm.json")
-part2_output_dir = os.path.join(campaign4_dir, "part2_vit")
+part1p5_output_dir = os.path.join(campaign4_dir, "part1p5_vit")
 tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained_2ns5ns", "TFR_val")
 out_base = os.path.dirname(os.path.abspath(__file__))
-CASE_TAG = "Part 2 (ViT, frozen hard-digitized thresholds, MDMM) 2ns/5ns"
+CASE_TAG = "Part 1.5 (ViT, frozen hard-digitized thresholds, MDMM) 2ns/5ns"
 
 # ------------------------------------------------- model (identical to training)
 class PatchExtractor(layers.Layer):
@@ -129,9 +129,9 @@ parser.add_argument('--fingerprint', type=str, default=None,
                     help="evaluate this run instead of the best-NLL one")
 args = parser.parse_args()
 
-summary_paths = glob.glob(os.path.join(part2_output_dir, "**", "summary.json"), recursive=True)
+summary_paths = glob.glob(os.path.join(part1p5_output_dir, "**", "summary.json"), recursive=True)
 if not summary_paths:
-    raise SystemExit(f"No Part 2 summary.json found under {part2_output_dir} -- has a run completed yet?")
+    raise SystemExit(f"No Part 1.5 summary.json found under {part1p5_output_dir} -- has a run completed yet?")
 summaries = [json.load(open(p)) for p in summary_paths]
 if args.fingerprint:
     record = next(r for r in summaries if r["fingerprint"] == args.fingerprint)

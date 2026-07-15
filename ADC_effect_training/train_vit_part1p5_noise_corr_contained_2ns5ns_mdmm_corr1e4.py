@@ -1,5 +1,5 @@
 """
-Part 2 (2ns5ns): retrains the ViT from scratch with campaign 4's median
+Part 1.5 (2ns5ns): retrains the ViT from scratch with campaign 4's median
 thresholds FROZEN and hard-digitized (real ADC-style bucketize, not the
 soft/differentiable SoftQuantizeLayer used in Part 1). Isolates the cost of
 freezing the thresholds -- same architecture as Part 1's ViT, so any
@@ -48,11 +48,11 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("runLOG_part2_2ns5ns.txt"),
+        logging.FileHandler("runLOG_part1p5_2ns5ns.txt"),
         logging.StreamHandler()
     ]
 )
-logging.info("--- Part 2 (2ns5ns, frozen hard-digitized thresholds) Script Execution Started ---")
+logging.info("--- Part 1.5 (2ns5ns, frozen hard-digitized thresholds) Script Execution Started ---")
 
 pi = 3.14159265359
 maxval = 1e9
@@ -181,42 +181,35 @@ campaign4_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_co
 median_thresholds_path = os.path.join(
     campaign4_dir, "median_thresholds_rnd_thr_noise_corr_contained_2ns5ns_mdmm.json")
 
-# Part 2 output lives under the same campaign dir, in its own subfolder
-part2_output_dir = os.path.join(campaign4_dir, "part2_vit")
+# Part 1.5 output lives under the same campaign dir, in its own subfolder
+part1p5_output_dir = os.path.join(campaign4_dir, "part1p5_vit")
 
 # %%
 class AbortOnStuck(tf.keras.callbacks.Callback):
     """
-    Aborts (sets self.aborted, stops training) on two independent signals so
-    the outer retry loop knows to reseed and try again:
-    - Divergence: val_loss stays > `threshold` for `patience` consecutive epochs.
-    - Stuck-at-init: val_loss hasn't improved from its starting (epoch-0) value
-      by more than `escape_margin` within the first `escape_window` epochs.
-      This is a ONE-TIME early check, not a sliding window -- an earlier sliding
-      "no improvement in the last N epochs" version of this class was found to
-      also fire on genuinely-converging runs during ordinary flat patches on the
-      way to a good minimum (confirmed on this script's own actual successful
-      run: it had a 20+ epoch flat stretch around epoch 240 despite already
-      having improved by +47,000 units from its start -- a sliding check would
-      have wrongly discarded it). Checking only against the STARTING value
-      within an early fixed window avoids this: a run that's escaped its
-      initial basin at all convincingly (this run: +16,554 units by epoch 10)
-      is never at risk again, while a run still glued to its starting value
-      after the window (Part 3's QConv2D run c9d6337c: total drift ~3.6 units
-      across 78 epochs) is unambiguously stuck. Once escaped, this check
-      permanently disables itself -- from then on, EarlyStopping alone decides
-      when training is done, since "has this converged and plateaued" is its
-      job, not this callback's.
+    Divergence guard only (das's original design): aborts (sets self.aborted,
+    stops training) if val_loss stays > `threshold` for `patience` consecutive
+    epochs, or goes non-finite.
+
+    This class used to also carry a "stuck-at-init" escape-window check (val_loss
+    hadn't moved from its starting value within an early window) -- removed. That
+    check only ever asked "did the loss move," never "is the loss any good," so a
+    single noisy dip below the margin counted as a permanent pass even if the run
+    immediately reconverged to the same bad plateau (observed directly on Part 2.5's
+    QConv2D: fp 4e4c3f5a "escaped" at epoch 1, refroze at val_loss=98980.2 by
+    epoch 5, and was accepted as a successful run at epoch 52 with
+    best_val_loss=97154.6 -- barely different from the runs that got correctly
+    flagged as stuck). The replacement is a post-hoc floor check in the retry
+    loop below (`best_val_loss > GOOD_VAL_LOSS_THRESHOLD` => retry) that judges
+    the actual achieved loss value instead of its trend, which both EarlyStopping
+    and the old escape-check were structurally unable to do -- see session notes
+    for the full derivation.
     """
-    def __init__(self, threshold=1e5, patience=5, escape_margin=100.0, escape_window=30):
+    def __init__(self, threshold=1e5, patience=5):
         super().__init__()
         self.thr = threshold
         self.pat = patience
-        self.escape_margin = escape_margin
-        self.escape_window = escape_window
         self.bad = 0
-        self.initial_loss = None
-        self.escaped = False
         self.aborted = False
 
     def on_epoch_end(self, epoch, logs=None):
@@ -229,33 +222,22 @@ class AbortOnStuck(tf.keras.callbacks.Callback):
                       f"for {self.pat} epochs -- diverged, aborting attempt.")
                 self.aborted = True
                 self.model.stop_training = True
-                return
         else:
             self.bad = 0
-
-        if self.initial_loss is None:
-            self.initial_loss = vloss
-
-        if not self.escaped:
-            if vloss < self.initial_loss - self.escape_margin:
-                self.escaped = True
-            elif epoch >= self.escape_window:
-                print(f"[AbortOnStuck] val_loss {vloss:.1f} hasn't improved by "
-                      f">{self.escape_margin} from its starting value "
-                      f"{self.initial_loss:.1f} within {self.escape_window} epochs "
-                      f"-- stuck at init, aborting attempt.")
-                self.aborted = True
-                self.model.stop_training = True
 
 
 # %%
 EPOCHS = 5000
-EARLY_STOP_PATIENCE = 50
+EARLY_STOP_PATIENCE = 100
 STUCK_THRESHOLD = 1e5
 STUCK_PATIENCE = 10
-STUCK_ESCAPE_MARGIN = 100.0
-STUCK_ESCAPE_WINDOW = 30
 MAX_RETRIES = 10
+# Floor gate: a run is only accepted if best_val_loss crosses into a regime that
+# actually reflects real learning, not just "training stopped." See Part 2.5's
+# script for the full calibration note (das's historical QConv2D reference
+# converges to -15,000 to -20,000; this script's own actual healthy run reached
+# -35,906, comfortably clearing this bar).
+GOOD_VAL_LOSS_THRESHOLD = -10000.0
 
 
 def main():
@@ -268,8 +250,8 @@ def main():
                   f"levels = {fixed_levels}")
 
     base_dir = os.path.join(
-        part2_output_dir,
-        "2t_part2_fixed_thr_{:.2f}_{:.2f}_{:.2f}".format(*fixed_thresholds),
+        part1p5_output_dir,
+        "2t_part1p5_fixed_thr_{:.2f}_{:.2f}_{:.2f}".format(*fixed_thresholds),
     )
     os.makedirs(base_dir, exist_ok=True)
     logging.info(f"Base output directory: {base_dir}")
@@ -282,7 +264,7 @@ def main():
         random.seed(seed)
         fingerprint = '%08x' % random.randrange(16**8)
         timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-        logging.info(f"=== Part 2 attempt {attempt}/{MAX_RETRIES}, seed={seed}, "
+        logging.info(f"=== Part 1.5 attempt {attempt}/{MAX_RETRIES}, seed={seed}, "
                       f"fingerprint={fingerprint} ===")
 
         vit = create_vit_model(
@@ -301,7 +283,7 @@ def main():
                               scale=MDMM_SCALE, damping=MDMM_DAMPING, name=f"corr_{p}")
             for p in ("x", "y", "cotA", "cotB")
         ]
-        model = MDMM(vit, constraints, constraint_samples=MDMM_CONSTRAINT_SAMPLES, name="mdmm_part2_vit")
+        model = MDMM(vit, constraints, constraint_samples=MDMM_CONSTRAINT_SAMPLES, name="mdmm_part1p5_vit")
         model.compile(
             optimizer=tf.keras.optimizers.Nadam(learning_rate=1e-3),
             loss=custom_loss,
@@ -339,8 +321,7 @@ def main():
         )
         csv_logger = tf.keras.callbacks.CSVLogger(
             os.path.join(run_dir, 'training_log.csv'), append=True)
-        abort_cb = AbortOnStuck(threshold=STUCK_THRESHOLD, patience=STUCK_PATIENCE,
-                                 escape_margin=STUCK_ESCAPE_MARGIN, escape_window=STUCK_ESCAPE_WINDOW)
+        abort_cb = AbortOnStuck(threshold=STUCK_THRESHOLD, patience=STUCK_PATIENCE)
         early_cb = tf.keras.callbacks.EarlyStopping(
             monitor='val_loss', patience=EARLY_STOP_PATIENCE,
             restore_best_weights=True, verbose=1)
@@ -355,11 +336,19 @@ def main():
         )
 
         if abort_cb.aborted:
-            logging.info(f"Attempt {attempt} aborted (stuck plateau). Retrying with new seed.")
+            logging.info(f"Attempt {attempt} aborted (diverged). Retrying with new seed.")
             continue
 
         best_val_loss = float(min(history.history.get('val_loss', [np.inf])))
         epochs_run = len(history.history.get('val_loss', []))
+
+        if best_val_loss > GOOD_VAL_LOSS_THRESHOLD:
+            logging.info(f"Attempt {attempt}: best_val_loss={best_val_loss:.2f} "
+                          f"(epochs_run={epochs_run}) doesn't clear the "
+                          f"{GOOD_VAL_LOSS_THRESHOLD} floor -- stuck, not a real "
+                          f"convergence. Retrying with new seed.")
+            continue
+
         logging.info(f"Attempt {attempt} succeeded: best_val_loss={best_val_loss:.2f}, "
                       f"epochs_run={epochs_run}")
 
@@ -384,9 +373,10 @@ def main():
         break
 
     if not success:
-        raise RuntimeError(f"Part 2 failed to escape the stuck plateau after {MAX_RETRIES} attempts.")
+        raise RuntimeError(f"Part 1.5 failed to clear the {GOOD_VAL_LOSS_THRESHOLD} val_loss "
+                            f"floor after {MAX_RETRIES} attempts.")
 
-    logging.info("--- Part 2 training complete ---")
+    logging.info("--- Part 1.5 training complete ---")
 
 
 if __name__ == "__main__":
