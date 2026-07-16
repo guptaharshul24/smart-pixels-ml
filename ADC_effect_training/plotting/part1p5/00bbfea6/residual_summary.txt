@@ -1,4 +1,4 @@
-run 00bbfea6 (Part 2 (ViT, frozen hard-digitized thresholds, MDMM) 2ns/5ns), checkpoint weights.392-t-35927.69-v-35906.40.weights.h5
+run 00bbfea6 (Part 1.5 (ViT, frozen hard-digitized thresholds, MDMM) 2ns/5ns), checkpoint weights.392-t-35927.69-v-35906.40.weights.h5
 x    : residual mean = +0.5458, std = 7.4265  (scale 123.6133)
 y    : residual mean = -0.1903, std = 2.2045  (scale 31.0050)
 cotA : residual mean = -0.0040, std = 0.3767  (scale 6.5124)

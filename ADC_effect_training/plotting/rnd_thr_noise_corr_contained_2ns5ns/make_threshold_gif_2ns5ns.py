@@ -91,7 +91,6 @@ ax.set_xlim(xmin - pad, xmax + pad)
 ax.set_ylim(max_len, 0)
 ax.set_xlabel("Threshold value (mV)")
 ax.set_ylabel("Epoch")
-ax.legend(loc="lower right")
 ax.grid(True, alpha=0.3)
 plt.tight_layout()
 
@@ -104,9 +103,15 @@ def update(i):
     for t in thr_names:
         if n_runs > 1:
             bold_lines[t].set_data(median_vals[t][:upto + 1], epochs_full[:upto + 1])
+            current_val = median_vals[t][upto]
+            label = f"{t} median (->{current_val:.1f})" if np.isfinite(current_val) else f"{t} median"
         else:
             run_upto = min(upto, len(per_run_data[0][t]) - 1)
             bold_lines[t].set_data(per_run_data[0][t][:run_upto + 1], epochs_full[:run_upto + 1])
+            current_val = per_run_data[0][t][run_upto]
+            label = f"{t} (->{current_val:.1f} so far)"
+        bold_lines[t].set_label(label)
+    ax.legend(loc="lower right")
     ax.set_title(f"Threshold convergence: {n_runs} run(s), 2ns/5ns (no MDMM), epoch {upto}")
     return [l for fl in faint_lines for l in fl.values()] + list(bold_lines.values())
 

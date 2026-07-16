@@ -1,10 +1,13 @@
 """
-Animated GIF of threshold convergence across ALL runs in the campaign: replays
+Animated GIF of threshold convergence across ALL runs in the correlated-noise
++ contained-cluster (no MDMM) 1ns/6ns threshold-search campaign: replays
 training epoch by epoch, threshold value on x, epoch on y (growing downward).
-Same data/styling as plot_thresholds_2ns5ns_mdmm.py (faint per-run lines +
-bold cross-run median) but animated instead of a single static frame.
+Same data/styling as plot_thresholds_rnd_thr_noise_corr_contained_1ns6ns.py
+(faint per-run lines + bold cross-run median) but animated instead of a
+single static frame, with the median legend label updating to the current
+epoch's value every frame.
 
-Usage: python make_threshold_gif_2ns5ns_mdmm.py [--frames 200] [--fps 20]
+Usage: python make_threshold_gif_rnd_thr_noise_corr_contained_1ns6ns.py [--frames 200] [--fps 20]
 """
 import os
 import csv
@@ -22,18 +25,18 @@ parser.add_argument("--frames", type=int, default=200, help="target number of an
 parser.add_argument("--fps", type=int, default=20)
 args = parser.parse_args()
 
-trained_models_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d/trained_models_1_6_noise_corr_contained_2ns5ns_mdmm"
-threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr_contained_2ns5ns_mdmm.jsonl")
+trained_models_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d/trained_models_1_6_noise_corr_contained"
+threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr_contained.jsonl")
 
 stuck_fingerprints = set()
 if os.path.exists(threshold_runs_path):
     for line in open(threshold_runs_path):
         if line.strip():
             r = json.loads(line)
-            if r.get("status", "completed") == "completed" and r.get("stuck", False):
+            if r.get("stuck", False):
                 stuck_fingerprints.add(r["fingerprint"])
 
-ckpt_dirs = glob.glob(os.path.join(trained_models_dir, "2t_rnd_thr_noise_corr_contained_2ns5ns_mdmm_5000ep_*", "Transformer_model-*-checkpoints"))
+ckpt_dirs = glob.glob(os.path.join(trained_models_dir, "2t_rnd_thr_noise_corr_contained_5000ep_*", "Transformer_model-*-checkpoints"))
 ckpt_dirs = [d for d in ckpt_dirs if os.path.basename(d).split("-")[1] not in stuck_fingerprints]
 ckpt_dirs = sorted(ckpt_dirs, key=os.path.getctime)
 
@@ -111,7 +114,7 @@ def update(i):
             label = f"{t} (->{current_val:.1f} so far)"
         bold_lines[t].set_label(label)
     ax.legend(loc="lower right")
-    ax.set_title(f"Threshold convergence: {n_runs} run(s), 2ns/5ns, epoch {upto}")
+    ax.set_title(f"Threshold convergence: {n_runs} run(s), corr noise + contained + 1ns/6ns, epoch {upto}")
     return [l for fl in faint_lines for l in fl.values()] + list(bold_lines.values())
 
 anim = FuncAnimation(fig, update, frames=len(frame_epochs), blit=False)
