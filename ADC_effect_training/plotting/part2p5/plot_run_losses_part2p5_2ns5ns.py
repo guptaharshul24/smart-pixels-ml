@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 
 dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d"
 part2p5_output_dir = os.path.join(
-    dataset_base_dir, "trained_models_2_5_noise_corr_contained_2ns5ns_mdmm", "part2p5_qconv2d")
+    dataset_base_dir, "trained_models_2_5_noise_corr_contained_mdmm", "part2p5_qconv2d")
 out = os.path.dirname(os.path.abspath(__file__))
 
 log_paths = glob.glob(os.path.join(part2p5_output_dir, "**", "QConv2D_model-*-checkpoints",

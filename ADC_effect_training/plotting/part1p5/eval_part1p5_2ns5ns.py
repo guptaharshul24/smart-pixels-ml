@@ -40,7 +40,7 @@ minval = 1e-9
 
 # ---------------------------------------------------------------- configuration
 dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d"
-campaign4_dir = os.path.join(dataset_base_dir, "trained_models_2_5_noise_corr_contained_2ns5ns_mdmm")
+campaign4_dir = os.path.join(dataset_base_dir, "trained_models_2_5_noise_corr_contained_mdmm")
 median_thresholds_path = os.path.join(
     campaign4_dir, "median_thresholds_rnd_thr_noise_corr_contained_2ns5ns_mdmm.json")
 part1p5_output_dir = os.path.join(campaign4_dir, "part1p5_vit")

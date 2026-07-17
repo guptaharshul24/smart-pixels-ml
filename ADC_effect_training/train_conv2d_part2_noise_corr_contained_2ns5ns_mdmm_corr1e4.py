@@ -134,7 +134,7 @@ logging.info(f"Training TFRecords directory: {tfrecords_dir_train}")
 logging.info(f"Validation TFRecords directory: {tfrecords_dir_val}")
 
 # Campaign 4 (Pearson correlation-constraint MDMM) -- the source of the frozen thresholds
-campaign4_dir = os.path.join(dataset_base_dir, "trained_models_2_5_noise_corr_contained_2ns5ns_mdmm")
+campaign4_dir = os.path.join(dataset_base_dir, "trained_models_2_5_noise_corr_contained_mdmm")
 median_thresholds_path = os.path.join(
     campaign4_dir, "median_thresholds_rnd_thr_noise_corr_contained_2ns5ns_mdmm.json")
 

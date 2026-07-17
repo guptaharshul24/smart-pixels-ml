@@ -26,7 +26,7 @@ logging.basicConfig(
 TRAINED_MODELS_DIR = (
     "/home/harshul-cern/work/projects/SmartPixML/"
     "dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/"
-    "shuffled_3d/trained_models_2_5_noise_corr_contained_2ns5ns"
+    "shuffled_3d/trained_models_2_5_noise_corr_contained"
 )
 JSONL_PATH = os.path.join(
     TRAINED_MODELS_DIR,

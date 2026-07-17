@@ -40,7 +40,7 @@ PART2P5_SCRIPT = os.path.join(HERE, "train_qconv2d_part2p5_noise_corr_contained_
 PART2P5_OUTPUT_DIR = (
     "/home/harshul-cern/work/projects/SmartPixML/"
     "dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/"
-    "shuffled_3d/trained_models_2_5_noise_corr_contained_2ns5ns_mdmm/part2p5_qconv2d"
+    "shuffled_3d/trained_models_2_5_noise_corr_contained_mdmm/part2p5_qconv2d"
 )
 RECORDS_DEST = os.path.join(HERE, "campaign_records", "mdmm_2ns5ns", "part2p5_qconv2d")
 

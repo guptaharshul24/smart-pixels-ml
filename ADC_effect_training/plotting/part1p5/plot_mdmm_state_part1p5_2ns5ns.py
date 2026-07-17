@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 
 dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d"
 part1p5_output_dir = os.path.join(
-    dataset_base_dir, "trained_models_2_5_noise_corr_contained_2ns5ns_mdmm", "part1p5_vit")
+    dataset_base_dir, "trained_models_2_5_noise_corr_contained_mdmm", "part1p5_vit")
 out = os.path.dirname(os.path.abspath(__file__))
 
 log_paths = glob.glob(os.path.join(part1p5_output_dir, "**", "Transformer_model-*-checkpoints",
