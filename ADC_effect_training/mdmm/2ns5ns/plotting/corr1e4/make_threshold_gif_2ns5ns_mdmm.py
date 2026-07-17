@@ -22,7 +22,7 @@ parser.add_argument("--frames", type=int, default=200, help="target number of an
 parser.add_argument("--fps", type=int, default=20)
 args = parser.parse_args()
 
-trained_models_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d/trained_models_1_6_noise_corr_contained_2ns5ns_mdmm"
+trained_models_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d/trained_models_2_5_noise_corr_contained_2ns5ns_mdmm"
 threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr_contained_2ns5ns_mdmm.jsonl")
 
 stuck_fingerprints = set()

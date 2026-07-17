@@ -70,7 +70,7 @@ CASES = {
         "records_dest": "mdmm_1ns6ns/corr1e4",
     },
     "2ns5ns": {
-        "trained_models_dir": os.path.join(DATASET_BASE, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm"),
+        "trained_models_dir": os.path.join(DATASET_BASE, "trained_models_2_5_noise_corr_contained_2ns5ns_mdmm"),
         "jsonl_name": "threshold_runs_rnd_thr_noise_corr_contained_2ns5ns_mdmm.jsonl",
         "proc_pattern": "2ns5ns_mdmm",
         "records_dest": "mdmm_2ns5ns/corr1e4",
@@ -87,9 +87,9 @@ PART1P5_2P5_CASES = {
         "part1p5_script": "train_vit_part1p5_noise_corr_contained_2ns5ns_mdmm_corr1e4.py",
         "part2p5_script": "train_qconv2d_part2p5_noise_corr_contained_2ns5ns_mdmm_corr1e4.py",
         "part1p5_output_dir": os.path.join(
-            DATASET_BASE, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part1p5_vit"),
+            DATASET_BASE, "trained_models_2_5_noise_corr_contained_2ns5ns_mdmm", "part1p5_vit"),
         "part2p5_output_dir": os.path.join(
-            DATASET_BASE, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm", "part2p5_qconv2d"),
+            DATASET_BASE, "trained_models_2_5_noise_corr_contained_2ns5ns_mdmm", "part2p5_qconv2d"),
         "part1p5_ckpt_prefix": "Transformer_model",
         "part2p5_ckpt_prefix": "QConv2D_model",
         "part1p5_plot_dir": os.path.join(ADC_ROOT, "plotting", "part1p5"),

@@ -168,7 +168,7 @@ dataset_base_dir = '/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x
 
 logging.info(f"Dataset base directory: {dataset_base_dir}")
 
-tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained_2ns5ns")
+tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_2_5_noise_corr_contained_2ns5ns")
 tfrecords_dir_train = os.path.join(tfrecords_base_dir, "TFR_train")
 tfrecords_dir_val   = os.path.join(tfrecords_base_dir, "TFR_val")
 
@@ -236,7 +236,7 @@ MDMM_MIN_CORR = {"x": 0.5, "y": 0.5, "cotA": 0.5, "cotB": 0.5}
 MDMM_OUTPUT_COLUMNS = {"x": 0, "y": 2, "cotA": 4, "cotB": 6}
 MDMM_LABEL_COLUMNS = {"x": 0, "y": 1, "cotA": 2, "cotB": 3}
 
-trained_models_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm")
+trained_models_dir = os.path.join(dataset_base_dir, "trained_models_2_5_noise_corr_contained_2ns5ns_mdmm")
 os.makedirs(trained_models_dir, exist_ok=True)
 threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr_contained_2ns5ns_mdmm.jsonl")
 median_thresholds_path = os.path.join(trained_models_dir, "median_thresholds_rnd_thr_noise_corr_contained_2ns5ns_mdmm.json")

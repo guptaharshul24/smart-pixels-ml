@@ -40,11 +40,11 @@ minval = 1e-9
 
 # ---------------------------------------------------------------- configuration
 dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d"
-campaign4_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns_mdmm")
+campaign4_dir = os.path.join(dataset_base_dir, "trained_models_2_5_noise_corr_contained_2ns5ns_mdmm")
 median_thresholds_path = os.path.join(
     campaign4_dir, "median_thresholds_rnd_thr_noise_corr_contained_2ns5ns_mdmm.json")
 part1p5_output_dir = os.path.join(campaign4_dir, "part1p5_vit")
-tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained_2ns5ns", "TFR_val")
+tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files_2_5_noise_corr_contained_2ns5ns", "TFR_val")
 out_base = os.path.dirname(os.path.abspath(__file__))
 CASE_TAG = "Part 1.5 (ViT, frozen hard-digitized thresholds, MDMM) 2ns/5ns"
 
@@ -164,7 +164,7 @@ model.load_weights(best_ckpt)
 
 # ------------------------------------------------------------- data + predict
 med = json.load(open(median_thresholds_path))
-tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained_2ns5ns")
+tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_2_5_noise_corr_contained_2ns5ns")
 # shuffle=False so model.predict() and the truth-collection loop see identical order
 test_generator = OptimizedDataGenerator(
     load_from_tfrecords_dir=tfrecords_dir_val,

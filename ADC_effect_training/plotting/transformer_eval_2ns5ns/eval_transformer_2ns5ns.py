@@ -36,9 +36,9 @@ minval = 1e-9
 
 # ---------------------------------------------------------------- configuration
 dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d"
-trained_models_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns")
+trained_models_dir = os.path.join(dataset_base_dir, "trained_models_2_5_noise_corr_contained_2ns5ns")
 threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr_contained_2ns5ns.jsonl")
-tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained_2ns5ns", "TFR_val")
+tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files_2_5_noise_corr_contained_2ns5ns", "TFR_val")
 out_base = os.path.dirname(os.path.abspath(__file__))
 CASE_TAG = "corr noise + contained + 2ns/5ns"
 

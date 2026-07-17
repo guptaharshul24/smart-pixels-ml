@@ -17,7 +17,7 @@ CASES = {
         "colors": ["#9ecae1", "#4292c6", "#08519c"],   # light -> dark blue for thr0/1/2
     },
     "2ns/5ns": {
-        "trained_models_dir": os.path.join(base, "trained_models_1_6_noise_corr_contained_2ns5ns"),
+        "trained_models_dir": os.path.join(base, "trained_models_2_5_noise_corr_contained_2ns5ns"),
         "jsonl": "threshold_runs_rnd_thr_noise_corr_contained_2ns5ns.jsonl",
         "glob": "2t_rnd_thr_noise_corr_contained_2ns5ns_5000ep_*",
         "colors": ["#fdae6b", "#f16913", "#a63603"],   # light -> dark orange for thr0/1/2

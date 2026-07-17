@@ -166,7 +166,7 @@ dataset_base_dir = '/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x
 
 logging.info(f"Dataset base directory: {dataset_base_dir}")
 
-tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained_2ns5ns")
+tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_2_5_noise_corr_contained_2ns5ns")
 tfrecords_dir_train = os.path.join(tfrecords_base_dir, "TFR_train")
 tfrecords_dir_val   = os.path.join(tfrecords_base_dir, "TFR_val")
 
@@ -186,7 +186,7 @@ STUCK_THRESHOLD = 1e5
 STUCK_PATIENCE = 20
 ESCAPE_BELOW = 5e4
 
-trained_models_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained_2ns5ns")
+trained_models_dir = os.path.join(dataset_base_dir, "trained_models_2_5_noise_corr_contained_2ns5ns")
 os.makedirs(trained_models_dir, exist_ok=True)
 threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr_contained_2ns5ns.jsonl")
 median_thresholds_path = os.path.join(trained_models_dir, "median_thresholds_rnd_thr_noise_corr_contained_2ns5ns.json")
