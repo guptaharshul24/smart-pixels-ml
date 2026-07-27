@@ -40,7 +40,7 @@ minval = 1e-9
 dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d"
 trained_models_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained_mdmm")
 threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr_contained_mdmm.jsonl")
-tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained_1ns6ns", "TFR_val")
+tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained", "TFR_val")
 out_base = os.path.dirname(os.path.abspath(__file__))
 CASE_TAG = "MDMM correlation-constraint 1e4 + corr noise + contained + 1ns/6ns"
 

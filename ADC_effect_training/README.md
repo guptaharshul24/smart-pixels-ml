@@ -63,7 +63,7 @@ ADC_effect_training/
 ├── train_conv2d_part2_..._mdmm_corr1e4.py     Stage 2: plain Conv2D
 ├── train_qconv2d_part2p5_..._mdmm_corr1e4.py  Stage 2.5: QConv2D
 ├── generate_tfr_*.py                     TFRecord generation for each dataset variant
-├── wrapper1-4_*.py                       self-sequencing launch chain (see below)
+├── wrapper2-3_*.py                       self-sequencing launch chain (see below)
 ├── mdmm/
 │   ├── 1ns6ns/ , 2ns5ns/                 Stage 1 MDMM threshold-search campaigns + their eval
 │   └── status_and_plot.py                one-stop status/plot regen across Part 1/1.5/2.5
@@ -105,10 +105,8 @@ selection) — most filenames encode this directly.
 | `train_vit_part1p5_noise_corr_contained_2ns5ns_mdmm_corr1e4.py` | **Stage 1.5**: ViT, thresholds frozen from campaign 4's median, hard-digitized, MDMM. |
 | `train_conv2d_part2_noise_corr_contained_2ns5ns_mdmm_corr1e4.py` | **Stage 2**: plain (unquantized) Conv2D twin of Stage 2.5, same MDMM/thresholds/retry design. Defines `CreatePlainModel` — every QKeras layer swapped for its plain Keras equivalent. |
 | `train_qconv2d_part2p5_noise_corr_contained_2ns5ns_mdmm_corr1e4.py` | **Stage 2.5**: QKeras-quantized Conv2D (`models.models.CreateModel`), `run_eagerly=True` (required — `QSeparableConv2D`'s quantizer calls `.numpy()` internally, which breaks under graph tracing in this QKeras/TF version combination). Currently 0/10 successful attempts. |
-| `wrapper1_swap_v3.py` | Waits for campaign 4's orchestrator to exit, then swaps a training script's DG import from `v2p5` to `v3` (string find-and-replace) — a one-time migration step, now stale/dormant since all scripts are already on v3. |
-| `wrapper2_submit_part1p5.py` | Waits for wrapper1's swap to land, then launches Stage 1.5 and syncs its summary into `campaign_records/`. |
+| `wrapper2_submit_part1p5.py` | Checks that the DG import swap (`v2p5` → `v3`) has landed in the target training script — a no-op check now, since all scripts are permanently on v3 — then launches Stage 1.5 and syncs its summary into `campaign_records/`. (Originally waited on `wrapper1_swap_v3.py`, a one-time migration script that performed that swap; wrapper1 has since been deleted since its job is permanently done and there was nothing left for it to do.) |
 | `wrapper3_submit_part2p5.py` | Waits for the Stage 1.5 process to appear then exit (not just "is it running," which would misfire on cold start), then launches Stage 2.5. |
-| `wrapper4_part2p5_then_fallback_part2.py` | Launches Stage 2.5 directly via `subprocess.run` (no polling — it controls the launch itself), and only if Stage 2.5 exits non-zero (exhausts all retries) does it launch Stage 2 as a fallback/diagnostic. |
 
 ### `mdmm/` — Stage 1 MDMM threshold-search campaigns
 
@@ -143,11 +141,13 @@ selection) — most filenames encode this directly.
 | `part2p5/` | Stage 2.5 | Same four-script pattern, `run_eagerly=True`. All eval output so far is from failed/stuck runs. |
 | `comparison_stage2_stage3/` | cross-stage | `compare_stage2_stage3.py` — Stage 1.5 vs Stage 2 residuals+uncertainty and pull overlays, adapted from das's `performance_plots.ipynb` multi-model overlay pattern. |
 
-## The launch chain (wrapper1-4)
+## The launch chain (wrapper2-3)
 
 Each wrapper polls real, independently-observable state rather than each other, so launch order
-doesn't matter — except wrapper4, which launches Stage 2.5 directly and only falls back to Stage 2
-if Stage 2.5 exhausts all retries (see `wrapper4_part2p5_then_fallback_part2.py`).
+doesn't matter. (There used to be a `wrapper4_part2p5_then_fallback_part2.py` that launched Stage 2.5
+and fell back to Stage 2 only if Stage 2.5 exhausted its retries — removed now that Stage 2 already
+has a good result and won't be rerun as a fallback; going forward Stage 2 is run before Stage 2.5,
+not after.)
 
 ## Data generator: v3 and `digitize`
 
