@@ -28,7 +28,7 @@ print(f"NOISE_MU={NOISE_MU}, NOISE_SIGMA={NOISE_SIGMA:.4f} mV, NOISE_RHO={NOISE_
 print(f"tau={tau*1e9:.4f} ns, dt_slice={dt_slice*1e9:.1f} ns")
 
 # correlated noise + contained-cluster filter, time slices 2ns (index 10) and 5ns (index 25)
-tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_2_5_noise_corr_contained_2ns5ns")
+tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_2_5_noise_corr_contained")
 
 dataset_train_dir = os.path.join(dataset_base_dir, "contained", "train")
 dataset_test_dir = os.path.join(dataset_base_dir, "contained", "test")

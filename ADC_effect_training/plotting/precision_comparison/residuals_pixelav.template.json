@@ -1,0 +1,43 @@
+{
+  "_comment": "Template for the raw-charge pixelAV (pre-CSA) reference data. Copy this to residuals_pixelav.json and fill in real numbers (or delete keys you don't have data for -- plot_precision_comparison.py skips anything missing, it does not require every cell filled in). Same schema as residuals_frontend.json: for v in x, y, A (alpha, deg), B (beta, deg): mean_<v>/up68_<v>/down68_<v> = the shortest-68%-interval half-widths above/below the mean measured residual (not a raw std, see aggregate_frontend_results.py's shortest_interval_68); mean_upsigma_<v>/mean_downsigma_<v> = the model's own mean PREDICTED uncertainty (optional -- omit these 4 keys per quantity if you don't have per-event predicted sigmas, the plot just won't draw the translucent uncertainty band for that point). x/y in um, A/B in degrees.",
+  "vit": {
+    "full_precision_2frames": {
+      "mean_x": null, "up68_x": null, "down68_x": null, "mean_upsigma_x": null, "mean_downsigma_x": null,
+      "mean_y": null, "up68_y": null, "down68_y": null, "mean_upsigma_y": null, "mean_downsigma_y": null,
+      "mean_A": null, "up68_A": null, "down68_A": null, "mean_upsigma_A": null, "mean_downsigma_A": null,
+      "mean_B": null, "up68_B": null, "down68_B": null, "mean_upsigma_B": null, "mean_downsigma_B": null
+    },
+    "digitized_inputs": {
+      "mean_x": null, "up68_x": null, "down68_x": null, "mean_upsigma_x": null, "mean_downsigma_x": null,
+      "mean_y": null, "up68_y": null, "down68_y": null, "mean_upsigma_y": null, "mean_downsigma_y": null,
+      "mean_A": null, "up68_A": null, "down68_A": null, "mean_upsigma_A": null, "mean_downsigma_A": null,
+      "mean_B": null, "up68_B": null, "down68_B": null, "mean_upsigma_B": null, "mean_downsigma_B": null
+    },
+    "quantized_nn": {
+      "mean_x": null, "up68_x": null, "down68_x": null, "mean_upsigma_x": null, "mean_downsigma_x": null,
+      "mean_y": null, "up68_y": null, "down68_y": null, "mean_upsigma_y": null, "mean_downsigma_y": null,
+      "mean_A": null, "up68_A": null, "down68_A": null, "mean_upsigma_A": null, "mean_downsigma_A": null,
+      "mean_B": null, "up68_B": null, "down68_B": null, "mean_upsigma_B": null, "mean_downsigma_B": null
+    }
+  },
+  "max_conv2d": {
+    "full_precision_2frames": {
+      "mean_x": null, "up68_x": null, "down68_x": null, "mean_upsigma_x": null, "mean_downsigma_x": null,
+      "mean_y": null, "up68_y": null, "down68_y": null, "mean_upsigma_y": null, "mean_downsigma_y": null,
+      "mean_A": null, "up68_A": null, "down68_A": null, "mean_upsigma_A": null, "mean_downsigma_A": null,
+      "mean_B": null, "up68_B": null, "down68_B": null, "mean_upsigma_B": null, "mean_downsigma_B": null
+    },
+    "digitized_inputs": {
+      "mean_x": null, "up68_x": null, "down68_x": null, "mean_upsigma_x": null, "mean_downsigma_x": null,
+      "mean_y": null, "up68_y": null, "down68_y": null, "mean_upsigma_y": null, "mean_downsigma_y": null,
+      "mean_A": null, "up68_A": null, "down68_A": null, "mean_upsigma_A": null, "mean_downsigma_A": null,
+      "mean_B": null, "up68_B": null, "down68_B": null, "mean_upsigma_B": null, "mean_downsigma_B": null
+    },
+    "quantized_nn": {
+      "mean_x": null, "up68_x": null, "down68_x": null, "mean_upsigma_x": null, "mean_downsigma_x": null,
+      "mean_y": null, "up68_y": null, "down68_y": null, "mean_upsigma_y": null, "mean_downsigma_y": null,
+      "mean_A": null, "up68_A": null, "down68_A": null, "mean_upsigma_A": null, "mean_downsigma_A": null,
+      "mean_B": null, "up68_B": null, "down68_B": null, "mean_upsigma_B": null, "mean_downsigma_B": null
+    }
+  }
+}
