@@ -45,3 +45,9 @@ runLOG*.txt
 # Ignore generated plots/animations -- reproducible from the .py scripts that make them
 *.png
 *.gif
+
+# Jennet's dataset3sr/residuals.json (scp'd from her personal nobackup dir) and our
+# verbatim/reformatted copy of it -- not ours to redistribute without checking with her
+# first. residuals_frontend.json (our own generated data) is NOT covered by this.
+ADC_effect_training/plotting/residual_comparison/dataset3sr_residuals_raw.json
+ADC_effect_training/plotting/residual_comparison/residuals_pixelav_3sr.json
