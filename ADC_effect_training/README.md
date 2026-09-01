@@ -72,7 +72,7 @@ is structurally blind to it, since MDMM only overrides `train_step`), learning r
 values matching to 5 significant figures), warm-starting from the Stage 2 checkpoint, and a
 softplus/leaky-clip "dead-zone" patch to `losses/loss.py`. None fixed it, and once the Keras fix was
 in place an isolation run confirmed none of them were needed either. Those artifacts are archived
-outside the tracked tree in `wrong_qconv_fixes/`.
+outside the tracked tree in `ADC_effect_training/wrong_qconv_fixes/`.
 
 ## QKeras and the Keras 2/3 split
 
@@ -262,7 +262,7 @@ trend-based check (this one, or `EarlyStopping` itself) can express.
 - **Comparison plot**: `plotting/comparison_stage2_stage3/` still covers only Stage 1.5 vs Stage 2.
   `plotting/residual_comparison/` does now include Stage 2.5 (no-noise, `e61b24cc`) as the
   `4-quantized` variant.
-- **`wrong_qconv_fixes/`**: untracked (gitignored) archive of the superseded QConv2D fix attempts —
+- **`ADC_effect_training/wrong_qconv_fixes/`**: untracked (gitignored) archive of the superseded QConv2D fix attempts —
   the warm-start script and its eval, the reverted `losses/loss.py` dead-zone patch, and the eval
   outputs of the stuck runs. Kept locally for reference; deliberately not part of the repo.
 

@@ -57,4 +57,4 @@ ADC_effect_training/plotting/residual_comparison/residuals_pixelav_3sr.json
 # ADC_effect_training/README.md) was found: the warm-start script and its eval, the
 # reverted losses/loss.py dead-zone patch, and the eval outputs of the stuck runs.
 # None of it is part of the working pipeline.
-wrong_qconv_fixes/
+ADC_effect_training/wrong_qconv_fixes/
