@@ -1,12 +1,23 @@
 """
-Evaluate a Part 2.5 (2ns5ns) QConv2D run: residuals, pulls, sigma hists, and
-summary (money) plots. Same pattern as plotting/part1p5/eval_part1p5_2ns5ns.py,
-adapted for models.models.CreateModel instead of the ViT.
+Evaluate a Part 2.5 no-noise, cold-start (2ns5ns) QConv2D run: residuals,
+pulls, sigma hists, and summary (money) plots. Same pattern as
+plotting/part2p5/eval_part2p5_2ns5ns.py, points at
+part2p5_qconv2d_no_noise/ and TFR_files_2_5_no_noise_contained/TFR_val
+instead of the noisy counterparts.
+
+Unlike the other eval_*.py scripts, --fingerprint is REQUIRED (not optional)
+here: these early cold-start attempts (under the new USE_DEAD_ZONE_FIX loss,
+see losses/loss.py) don't clear the -10000.0 GOOD_VAL_LOSS_THRESHOLD floor,
+so train_qconv2d_part2p5_no_noise_2ns5ns_mdmm_corr1e4.py's floor-gate never
+writes a summary.json for them -- there's nothing to auto-select the "best"
+run from. fixed_thresholds/levels are read directly from campaign 4's
+median_thresholds.json instead (same source summary.json would have quoted
+anyway), and best_val_loss is read directly off the checkpoint filename.
 
 Note: model.predict() needs run_eagerly=True at compile time -- QKeras's
 QSeparableConv2D quantizer calls .numpy() internally, which raises
 NotImplementedError under graph-mode tracing (same issue documented in
-train_qconv2d_part2p5_noise_corr_contained_2ns5ns_mdmm_corr1e4.py).
+train_qconv2d_part2p5_no_noise_2ns5ns_mdmm_corr1e4.py).
 """
 import os
 # Must be set before any TF/Keras import: models/models.py's CreateModel is
@@ -33,7 +44,7 @@ from scipy.optimize import curve_fit
 import tensorflow as tf
 import tensorflow_probability as tfp  # must precede `from qkeras import *` -- see losses.loss import-order note
 
-# repo root: file lives in ADC_effect_training/plotting/part2p5/, 3 levels down
+# repo root: file lives in ADC_effect_training/plotting/part2p5_no_noise/, 3 levels down
 repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 sys.path.insert(0, repo_root)
 
@@ -50,39 +61,33 @@ minval = 1e-9
 # ---------------------------------------------------------------- configuration
 dataset_base_dir = "/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d"
 campaign4_dir = os.path.join(dataset_base_dir, "trained_models_2_5_noise_corr_contained_mdmm")
-part2p5_output_dir = os.path.join(campaign4_dir, "part2p5_qconv2d")
-tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files_2_5_noise_corr_contained", "TFR_val")
+part2p5_output_dir = os.path.join(campaign4_dir, "part2p5_qconv2d_no_noise")
+tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files_2_5_no_noise_contained", "TFR_val")
 out_base = os.path.dirname(os.path.abspath(__file__))
-CASE_TAG = "Part 2.5 (QConv2D, frozen hard-digitized thresholds, MDMM) 2ns/5ns"
+CASE_TAG = "Part 2.5 no-noise, cold-start (QConv2D, frozen hard-digitized thresholds, MDMM) 2ns/5ns"
+
+median_thresholds_path = os.path.join(
+    campaign4_dir, "median_thresholds_rnd_thr_noise_corr_contained_2ns5ns_mdmm.json")
+med_info = json.load(open(median_thresholds_path))
+fixed_thresholds = med_info["median_thresholds"]
+fixed_levels = med_info["levels"]
 
 # ----------------------------------------------------------- run selection
 parser = argparse.ArgumentParser()
-parser.add_argument('--fingerprint', type=str, default=None,
-                    help="evaluate this run instead of the best-NLL one")
+parser.add_argument('--fingerprint', type=str, required=True,
+                    help="these runs don't clear the floor-gate, so there's no "
+                         "summary.json to auto-select a 'best' one from")
 args = parser.parse_args()
+fingerprint = args.fingerprint
 
-summary_paths = glob.glob(os.path.join(part2p5_output_dir, "**", "summary.json"), recursive=True)
-if not summary_paths:
-    raise SystemExit(f"No Part 2.5 summary.json found under {part2p5_output_dir} -- has a run completed yet?")
-summaries = [json.load(open(p)) for p in summary_paths]
-if args.fingerprint:
-    record = next(r for r in summaries if r["fingerprint"] == args.fingerprint)
-else:
-    record = min(summaries, key=lambda r: r["best_val_loss"])
-
-fingerprint = record["fingerprint"]
-print(f"Evaluating run {fingerprint} (seed={record['seed']}, "
-      f"best_val_loss={record['best_val_loss']}, "
-      f"fixed_thresholds={[round(t,2) for t in record['fixed_thresholds']]})")
-
-plot_dir = os.path.join(out_base, fingerprint)
-os.makedirs(plot_dir, exist_ok=True)
-
-# --------------------------------------------------- build model + load weights
-model = CreateModel(shape=(16, 16, 2), output=14, n_filters=5, pool_size=3)
-model.compile(optimizer=tf.keras.optimizers.Nadam(learning_rate=1e-3), loss=custom_loss, run_eagerly=True)
-
-checkpoints_dir = os.path.join(record["checkpoint_dir"], "checkpoints")
+base_dir = os.path.join(
+    part2p5_output_dir,
+    "2t_part2p5_no_noise_fixed_thr_{:.2f}_{:.2f}_{:.2f}".format(*fixed_thresholds))
+checkpoint_dir = glob.glob(os.path.join(base_dir, f"QConv2D_model-{fingerprint}-checkpoints"))
+if not checkpoint_dir:
+    raise SystemExit(f"No checkpoint dir found for fingerprint {fingerprint} under {base_dir}")
+checkpoint_dir = checkpoint_dir[0]
+checkpoints_dir = os.path.join(checkpoint_dir, "checkpoints")
 
 def extract_val_metric(fname):
     try:
@@ -92,7 +97,18 @@ def extract_val_metric(fname):
 
 ckpts = glob.glob(os.path.join(checkpoints_dir, "weights.*.weights.h5"))
 best_ckpt = min(ckpts, key=lambda f: extract_val_metric(os.path.basename(f)))
-print(f"Loading best checkpoint (val_loss={extract_val_metric(os.path.basename(best_ckpt)):.2f}): {os.path.basename(best_ckpt)}")
+best_val_loss = extract_val_metric(os.path.basename(best_ckpt))
+print(f"Evaluating run {fingerprint} (best_val_loss={best_val_loss:.2f}, "
+      f"fixed_thresholds={[round(t,2) for t in fixed_thresholds]})")
+
+plot_dir = os.path.join(out_base, fingerprint)
+os.makedirs(plot_dir, exist_ok=True)
+
+# --------------------------------------------------- build model + load weights
+model = CreateModel(shape=(16, 16, 2), output=14, n_filters=5, pool_size=3)
+model.compile(optimizer=tf.keras.optimizers.Nadam(learning_rate=1e-3), loss=custom_loss, run_eagerly=True)
+
+print(f"Loading best checkpoint (val_loss={best_val_loss:.2f}): {os.path.basename(best_ckpt)}")
 model.load_weights(best_ckpt)
 
 # ------------------------------------------------------------- data + predict
@@ -102,8 +118,8 @@ test_generator = OptimizedDataGenerator(
     shuffle=False,
     quantize=False,
     digitize=True,
-    digitize_thresholds=record["fixed_thresholds"],
-    digitize_levels=record["fixed_levels"],
+    digitize_thresholds=fixed_thresholds,
+    digitize_levels=fixed_levels,
 )
 labels_scale = test_generator.labels_scale
 print(f"labels_scale = {labels_scale}")

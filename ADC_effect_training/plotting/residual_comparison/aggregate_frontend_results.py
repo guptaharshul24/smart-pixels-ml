@@ -23,7 +23,17 @@ descriptive names.
 Only includes (architecture, variant) combos we actually have a valid
 trained result for -- no fabricated/placeholder entries. As of writing:
   - transformer / 3-input_dig_2t : Stage 1.5 (frozen thresholds, MDMM), fp 00bbfea6
-  - max_2dconv  / 3-input_dig_2t : Stage 2 (plain Conv2D, MDMM), fp 986827aa
+  - max_2dconv  / 3-input_dig_2t : Stage 2 (non-quantized Conv2D, MDMM), fp 986827aa
+  - (no_noise condition) transformer / 3-input_dig_2t : Stage 1.5 no-noise, fp fc8976dc
+  - (no_noise condition) max_2dconv  / 3-input_dig_2t : Stage 2 no-noise, fp 64d9b19b
+    (attempt 2/10 -- attempt 1, fp 692b1b40, hit the NLL-clip stuck-at-init
+    trap in losses/loss.py's custom_loss and never trained; not used here)
+  - (no_noise condition) max_2dconv  / 4-quantized : Stage 2.5 (QConv2D) no-noise,
+    fp e61b24cc -- attempt 1/10, best_val_loss=-20864.39 (epoch 1193), EarlyStopping
+    at epoch 1293. First valid QConv2D result, after root-causing the prior 0/20+
+    failure rate to a QKeras/Keras-3 incompatibility that silently dropped the
+    gradient for one of each layer's kernel/bias quantizer (fixed via
+    TF_USE_LEGACY_KERAS=1 -- see models/models.py and models/mdmm.py).
 Missing on purpose (not written to the JSON at all):
   - transformer / 4-quantized : no QViT stage exists
   - max_2dconv / 1-noquant_20t, 2-noquant_2t : neither architecture has a
@@ -31,8 +41,14 @@ Missing on purpose (not written to the JSON at all):
     Stage 1's soft/trainable ADC (fp a43ed7b9) is still considered a
     digitized-input case, not full-precision, so it isn't relabeled into
     either slot; Max Conv2D was never trained on non-digitized input at all.
-  - max_2dconv / 4-quantized : Stage 2.5 (QConv2D) has no valid result yet
-    (0/20 across MDMM and no-MDMM attempts, all stuck ~val_loss 98980)
+  - (frontend condition) max_2dconv / 4-quantized : Stage 2.5 (QConv2D) has no
+    valid noisy-frontend result yet -- only the no_noise run has succeeded so far.
+
+Writes one JSON per dataset condition (residuals_<condition>.json), not just
+one -- "frontend" is our standard result (correlated-noise TFRs, same as
+everything else in the pipeline), "no_noise" is the no-noise rerun (same
+frozen thresholds, contained clusters, 2ns/5ns -- only noise is toggled off)
+for both transformer (fp fc8976dc) and max_2dconv (fp 64d9b19b).
 """
 import os
 import json
@@ -47,12 +63,23 @@ repo_root = os.path.abspath(os.path.join(here, "..", "..", ".."))
 # (see comparison_stage2_stage3/compare_stage2_stage3.py)
 LABELS_SCALE = {"x": 123.6133301, "y": 31.00504472, "cotA": 6.51238097, "cotB": 1.84647953}
 
-RUNS = {
-    "transformer": {
-        "3-input_dig_2t": "ADC_effect_training/plotting/part1p5/00bbfea6/predictions.csv",
+CONDITIONS = {
+    "frontend": {
+        "transformer": {
+            "3-input_dig_2t": "ADC_effect_training/plotting/part1p5/00bbfea6/predictions.csv",
+        },
+        "max_2dconv": {
+            "3-input_dig_2t": "ADC_effect_training/plotting/part2/986827aa/predictions.csv",
+        },
     },
-    "max_2dconv": {
-        "3-input_dig_2t": "ADC_effect_training/plotting/part2/986827aa/predictions.csv",
+    "no_noise": {
+        "transformer": {
+            "3-input_dig_2t": "ADC_effect_training/plotting/part1p5_no_noise/fc8976dc/predictions.csv",
+        },
+        "max_2dconv": {
+            "3-input_dig_2t": "ADC_effect_training/plotting/part2_no_noise/64d9b19b/predictions.csv",
+            "4-quantized": "ADC_effect_training/plotting/part2p5_no_noise/e61b24cc/predictions.csv",
+        },
     },
 }
 
@@ -140,21 +167,22 @@ def summarize(csv_path):
 
 
 def main():
-    out = {}
-    for arch, variants in RUNS.items():
-        out[arch] = {}
-        for variant, rel_path in variants.items():
-            csv_path = os.path.join(repo_root, rel_path)
-            if not os.path.exists(csv_path):
-                print(f"SKIP {arch}/{variant}: {csv_path} not found")
-                continue
-            out[arch][variant] = summarize(csv_path)
-            print(f"{arch}/{variant}: computed")
+    for condition, runs in CONDITIONS.items():
+        out = {}
+        for arch, variants in runs.items():
+            out[arch] = {}
+            for variant, rel_path in variants.items():
+                csv_path = os.path.join(repo_root, rel_path)
+                if not os.path.exists(csv_path):
+                    print(f"SKIP {condition}/{arch}/{variant}: {csv_path} not found")
+                    continue
+                out[arch][variant] = summarize(csv_path)
+                print(f"{condition}/{arch}/{variant}: computed")
 
-    out_path = os.path.join(here, "residuals_frontend.json")
-    with open(out_path, "w") as f:
-        json.dump(out, f, indent=2)
-    print(f"\nsaved to {out_path}")
+        out_path = os.path.join(here, f"residuals_{condition}.json")
+        with open(out_path, "w") as f:
+            json.dump(out, f, indent=2)
+        print(f"saved to {out_path}")
 
 
 if __name__ == "__main__":

@@ -19,10 +19,43 @@ Differences from the original:
   ModelCheckpoint) and the checkpoint format keep working unchanged. Note: the
   lambdas are NOT saved in checkpoints; a mid-run resume restarts them from 0 and
   they re-grow wherever the constraint is still violated.
+
+Keras runtime (2026-08-25): this file is shared by every train_*.py (ViT,
+non-quantized Conv2D, AND QConv2D), unlike models/models.py which is QConv2D-
+only. QKeras 0.9.0 requires legacy Keras 2 (tf_keras) -- running it under
+Keras 3 was root-caused as the reason QConv2D's per-layer gradient tracking
+silently breaks (a layer with both kernel_quantizer and bias_quantizer only
+gets a real gradient on one of the two under Keras 3; both work under
+tf_keras -- see models/models.py's comment for the full verification). The
+ViT and non-quantized Conv2D paths never touch QKeras and already work fine
+under Keras 3, so this import is made CONDITIONAL on the TF_USE_LEGACY_KERAS
+env var (set by the QConv2D train_*.py scripts before any TF/Keras import,
+same var tf.keras itself respects) rather than switched unconditionally --
+that keeps every already-working path byte-identical while letting the
+QConv2D path opt into tf_keras. id()-based lambda identification (see above)
+is a plain Python builtin, not Keras-version-specific, and works fine under
+either runtime; add_weight/compute_loss are standard Keras APIs present in
+tf_keras too.
+
+Verified end-to-end (2026-08-25): a full cold-start no-noise Part 2.5 run
+under this fix (fp 54d7875b) trained cleanly through 170+ epochs with real,
+smooth loss improvement (val_loss -14477.61 and still falling, first cold-
+start attempt in the whole investigation to clear the -10000 floor gate) and
+well-calibrated pulls (sigma 0.84-0.99 on all four targets) -- not just the
+isolated single-layer gradient check. MDMM's lambda mechanics (ascent,
+id()-based tracking, penalty computation) are confirmed working correctly
+under tf_keras through this run: pen_corr_* stayed at 0.0 throughout
+(constraint satisfied, no collapse), unlike every pre-fix attempt where it
+climbed unboundedly.
 """
+import os
 import tensorflow as tf
-import keras
-from keras import layers
+if os.environ.get("TF_USE_LEGACY_KERAS") == "1":
+    import tf_keras as keras
+    from tf_keras import layers
+else:
+    import keras
+    from keras import layers
 
 
 class OutputConstraint(layers.Layer):

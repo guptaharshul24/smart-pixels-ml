@@ -44,15 +44,23 @@ here = os.path.dirname(os.path.abspath(__file__))
 # which architectures to actually draw (keys match the JSON files' own naming)
 ARCHS = ["transformer", "max_2dconv"]
 ARCH_LABELS = {"transformer": "ViT", "max_2dconv": "Max Conv2D"}
-DATASETS = ["pixelav", "frontend"]
-DATASET_LABELS = {"pixelav": "pixelAV (raw charge, 3sr dataset)", "frontend": "Frontend effects"}
+DATASETS = ["pixelav", "frontend", "no_noise"]
+DATASET_LABELS = {
+    "pixelav": "pixelAV (raw charge, 3sr dataset)",
+    "frontend": "Frontend effects, corr_noise",
+    "no_noise": "Frontend effects, no_noise",
+}
 # blue-family for ViT, orange-family for Max Conv2D; darker/solid = frontend
-# (our own realistic result), lighter = pixelAV (prior reference)
+# (our own realistic result), lighter = pixelAV (prior reference); no_noise
+# gets its own color per architecture (purple for ViT, green for Max Conv2D)
+# since it's a third condition, not a shade of either existing one
 GROUP_COLORS = {
     ("transformer", "frontend"): "tab:blue",
     ("transformer", "pixelav"): "tab:cyan",
+    ("transformer", "no_noise"): "tab:purple",
     ("max_2dconv", "frontend"): "tab:orange",
     ("max_2dconv", "pixelav"): "tab:red",
+    ("max_2dconv", "no_noise"): "tab:green",
 }
 VARIANTS = ["1-noquant_20t", "2-noquant_2t", "3-input_dig_2t", "4-quantized"]
 VARIANT_LABELS = {
@@ -62,16 +70,19 @@ VARIANT_LABELS = {
     "4-quantized": "Quantized NN",
 }
 VARIANT_MARKERS = {"1-noquant_20t": "D", "2-noquant_2t": "o", "3-input_dig_2t": "s", "4-quantized": "^"}
-QUANTITIES = [("x", r"$R_x$ [um]", (-15, 15)), ("y", r"$R_y$ [um]", (-8, 8)),
-              ("A", r"$R_\alpha$ [deg]", (-8, 8)), ("B", r"$R_\beta$ [deg]", (-8, 8))]
+QUANTITIES = [("x", r"$R_x$ [um]"), ("y", r"$R_y$ [um]"),
+              ("A", r"$R_\alpha$ [deg]"), ("B", r"$R_\beta$ [deg]")]
 
 # explicit row order (top to bottom): pixelAV rows first (grouped together,
-# any architecture), then ViT frontend, then Max Conv2D frontend
+# any architecture), then ViT frontend (corr_noise, then no_noise), then
+# Max Conv2D frontend (corr_noise, then no_noise)
 GROUP_ORDER = [
     ("max_2dconv", "pixelav"),
     ("transformer", "pixelav"),
     ("transformer", "frontend"),
+    ("transformer", "no_noise"),
     ("max_2dconv", "frontend"),
+    ("max_2dconv", "no_noise"),
 ]
 
 
@@ -85,7 +96,7 @@ def load(name):
 
 
 def main():
-    data = {"pixelav": load("pixelav_3sr"), "frontend": load("frontend")}
+    data = {"pixelav": load("pixelav_3sr"), "frontend": load("frontend"), "no_noise": load("no_noise")}
 
     groups = [g for g in GROUP_ORDER if g[0] in ARCHS and
               any(variant in data[g[1]].get(g[0], {}) for variant in VARIANTS)]
@@ -97,7 +108,7 @@ def main():
 
     y_positions = list(range(len(groups), 0, -1))
 
-    for ax, (quantity, xlabel, xlim) in zip(axes, QUANTITIES):
+    for ax, (quantity, xlabel) in zip(axes, QUANTITIES):
         ax.axvline(0, color="gray", zorder=0, lw=1)
         for (arch, dataset), y0 in zip(groups, y_positions):
             color = GROUP_COLORS[(arch, dataset)]
@@ -122,7 +133,8 @@ def main():
                 ax.errorbar(mean, y, xerr=[[down], [up]], color=color,
                             marker=VARIANT_MARKERS[variant], linestyle="", capsize=3)
         ax.set_xlabel(xlabel)
-        ax.set_xlim(*xlim)
+        ax.margins(x=0.08)  # auto-scale to whatever's actually plotted, with padding
+                             # so bands/caps aren't flush against the edge
         ax.set_yticks([])
         ax.grid(True, axis="x", alpha=0.3)
 
@@ -135,7 +147,7 @@ def main():
                       for g in groups]
     variant_handles = [plt.Line2D([0], [0], marker=VARIANT_MARKERS[v], color="black",
                                    linestyle="", label=VARIANT_LABELS[v]) for v in VARIANTS]
-    leg1 = fig.legend(handles=group_handles, loc="upper left", ncol=1,
+    leg1 = fig.legend(handles=group_handles, loc="upper left", ncol=2,
                        bbox_to_anchor=(0.02, 1.1), frameon=False)
     fig.add_artist(leg1)
     fig.legend(handles=variant_handles, loc="upper right", ncol=1,

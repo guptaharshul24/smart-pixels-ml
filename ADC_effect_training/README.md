@@ -19,34 +19,89 @@ results but hasn't been carried through the later stages yet (see [Status](#stat
 | **2** | `train_conv2d_part2_noise_corr_contained_2ns5ns_mdmm_corr1e4.py` | plain Conv2D (1,869 params) | frozen, hard-digitized | cost of shrinking to a chip-sized architecture |
 | **2.5** | `train_qconv2d_part2p5_noise_corr_contained_2ns5ns_mdmm_corr1e4.py` | QKeras QConv2D (4-bit conv / 8-bit dense) | frozen, hard-digitized | cost of quantization-aware training — the actual chip-deployable model |
 
+> **Stage 2.5 requires `TF_USE_LEGACY_KERAS=1`** before any TF/Keras import — QKeras needs Keras 2.
+> Without it, training silently fails to converge. See [QKeras and the Keras 2/3 split](#qkeras-and-the-keras-23-split).
+
 Stage 1 produces the frozen thresholds (`median_thresholds_*.json`, median over 5 independent runs)
 that every later stage trains against. Stages 1.5/2/2.5 are otherwise identical in dataset, MDMM
 config, and retry/floor-gate logic — only the model itself changes.
 
 ## Results (2ns/5ns)
 
-| Stage | Run | best_val_loss | x corr | y corr | cotA corr | cotB corr |
-|---|---|---|---|---|---|---|
-| 1.5 (ViT) | `00bbfea6` | -35,906 | 0.991 | 0.987 | 0.994 | 0.975 |
-| 2 (plain Conv2D) | `986827aa` | -25,749 | 0.973 | 0.973 | 0.987 | 0.960 |
-| 2.5 (QConv2D) | — | **all 10/10 attempts failed** | — | — | — | — |
+Two dataset conditions: **corr_noise** (the standard pipeline — correlated readout noise injected)
+and **no_noise** (identical in every other respect — same frozen thresholds, same contained-cluster
+filter, same time slices — with noise switched off, to isolate the cost of the noise model itself).
 
-**Stage 2.5 has never produced a valid result.** Every attempt, across 10 different seeds, gets
-stuck at essentially the identical val_loss (~98,980) and never clears the acceptance floor. A
-second campaign with MDMM removed entirely (`train_qconv2d_part2p5_noise_corr_contained_2ns5ns_no_mdmm.py`)
-also got 10/10 stuck at the same value — **ruling out MDMM as the cause**. The leading hypothesis is
-now a QAT/quantizer gradient problem independent of MDMM: every run logs `UserWarning: Gradients do
-not exist for variables [...bias terms of every quantized layer...]` — `tape.gradient()` returning
-`None` (not just small) for every bias, a structurally disconnected gradient path through the
-`bias_quantizer` wrapping, not classic vanishing-gradient-via-saturated-activation (the architecture
-has no ReLU anywhere — only `quantized_tanh` at 4-bit/8-bit plus one final linear `quantized_bits`).
-Also consistent with this QKeras version predating full compatibility with the current TF/Keras
-version (the script already needs `run_eagerly=True` because `QSeparableConv2D`'s quantizer calls
-`.numpy()` internally). Not yet definitively proven — next step is a standalone script printing
-`tape.gradient(loss, model.trainable_variables)` per-variable on a single batch to confirm which are
-`None` vs. just small, before assuming a specific root cause.
-`plotting/comparison_stage2_stage3/` has the Stage 2 vs Stage 1.5 comparison; Stage 2.5 will be
-added there once a real result exists.
+| Stage | Condition | Run | best_val_loss | x corr | y corr | cotA corr | cotB corr |
+|---|---|---|---|---|---|---|---|
+| 1.5 (ViT) | corr_noise | `00bbfea6` | -35,906 | 0.991 | 0.987 | 0.994 | 0.975 |
+| 1.5 (ViT) | no_noise | `fc8976dc` | -39,321 | 0.993 | 0.990 | 0.998 | 0.992 |
+| 2 (plain Conv2D) | corr_noise | `986827aa` | -25,749 | 0.973 | 0.973 | 0.987 | 0.960 |
+| 2 (plain Conv2D) | no_noise | `64d9b19b` | -28,657 | 0.975 | 0.974 | 0.991 | 0.978 |
+| 2.5 (QConv2D) | no_noise | `e61b24cc` | -20,864 | 0.967 | 0.969 | 0.982 | 0.968 |
+| 2.5 (QConv2D) | corr_noise | — | not yet rerun since the fix | — | — | — | — |
+
+Accuracy degrades monotonically down the stages exactly as intended (ViT → plain Conv2D → quantized
+Conv2D), and each no_noise run beats its corr_noise twin, as expected.
+
+### Stage 2.5 (QConv2D): root-caused and fixed
+
+Stage 2.5 failed **0-for-20+** across every configuration tried — with and without MDMM, cold-start
+and warm-start, noisy and no-noise, across several loss functions, learning rates and MDMM scales.
+Every run collapsed to a near-constant prediction and never cleared the acceptance floor.
+
+**Root cause: QKeras 0.9.0 requires legacy Keras 2, but this environment defaults to Keras 3.**
+Under Keras 3, QKeras silently loses the gradient for one of each layer's
+`kernel_quantizer`/`bias_quantizer` — never both. Confirmed by direct gradient inspection through
+the real `MDMM.train_step` path: 5 of 11 model variables came back with `grad=None` (not small —
+*no differentiable connection at all*), and every one of those 5 was a **bias**. Rebuilding the same
+architecture with `bias_quantizer=None` flipped the pattern completely — the kernels went `None`
+instead. So it is not "bias quantization is broken"; only one of the two quantizers in a layer can
+carry a gradient at a time under Keras 3. (This also explains the long-standing
+`UserWarning: Gradients do not exist for variables [...bias terms...]` every run logged.)
+
+**Fix:** `os.environ["TF_USE_LEGACY_KERAS"] = "1"` as the very first statement of the training
+script, before any TF/Keras/QKeras import — see [QKeras and the Keras 2/3 split](#qkeras-and-the-keras-23-split).
+With that one line and *no other change*, a cold start trained cleanly on the first attempt:
+`e61b24cc`, best_val_loss **-20,864**, 1293 epochs, no retries, pull sigmas 0.81–0.99 on all four
+targets and predicted cotA/cotB spread matching truth (std 0.513 vs 0.532, 0.432 vs 0.448) — i.e.
+genuine, non-degenerate predictions rather than the collapsed constant every previous attempt gave.
+
+Several things were tried and ruled out *before* the real cause was found — MDMM scale (`val_loss`
+is structurally blind to it, since MDMM only overrides `train_step`), learning rate (10× produced
+values matching to 5 significant figures), warm-starting from the Stage 2 checkpoint, and a
+softplus/leaky-clip "dead-zone" patch to `losses/loss.py`. None fixed it, and once the Keras fix was
+in place an isolation run confirmed none of them were needed either. Those artifacts are archived
+outside the tracked tree in `wrong_qconv_fixes/`.
+
+## QKeras and the Keras 2/3 split
+
+Since TF 2.16, `keras` is a separate package defaulting to **Keras 3**, and TensorFlow only aliases
+`tf.keras` to whichever is configured. QKeras predates that rewrite and is written against the
+Keras 2 API, so it breaks *silently* (dropped gradients, no error) under Keras 3.
+
+This repo does **not** pin an old TensorFlow to work around it. Both packages coexist in the pixi
+env (`keras` 3.15 and `tf_keras` 2.19), and the QConv2D scripts opt into the legacy runtime:
+
+```python
+import os
+os.environ["TF_USE_LEGACY_KERAS"] = "1"   # MUST precede every TF/Keras/QKeras import
+```
+
+TensorFlow reads that variable **once**, when `tensorflow` is first imported, and points `tf.keras`
+at `tf_keras`; setting it later has no effect. It is a routing switch, not a version change —
+nothing is installed or downgraded.
+
+Because the variable only redirects `tf.keras`, a bare `import keras` still resolves to Keras 3 in
+the same process. Files are therefore handled differently depending on who uses them:
+
+| File | Import style | Why |
+|---|---|---|
+| `models/models.py` | unconditional `import tf_keras as keras` | QConv2D-exclusive — nothing else imports it |
+| `models/mdmm.py` | **conditional** on `TF_USE_LEGACY_KERAS` | shared by ViT, plain Conv2D *and* QConv2D; the first two already work fine under Keras 3, so their behavior must stay byte-identical |
+| `plotting/part2p5*/eval_*.py` | sets the env var too | mixing a `tf_keras` model with a Keras 3 optimizer raises `AttributeError: 'KerasTensor' object has no attribute 'ndim'` |
+
+The ViT and plain-Conv2D stages never touch QKeras and are unaffected either way.
 
 ## MDMM: preventing angle-prediction collapse
 
@@ -68,6 +123,7 @@ ADC_effect_training/
 ├── train_vit_part1p5_..._mdmm_corr1e4.py Stage 1.5: frozen-threshold ViT
 ├── train_conv2d_part2_..._mdmm_corr1e4.py     Stage 2: plain Conv2D
 ├── train_qconv2d_part2p5_..._mdmm_corr1e4.py  Stage 2.5: QConv2D
+├── train_*_no_noise_2ns5ns_mdmm_corr1e4.py    no-noise twins of Stages 1.5/2/2.5
 ├── generate_tfr_*.py                     TFRecord generation for each dataset variant
 ├── wrapper2-3_*.py                       self-sequencing launch chain (see below)
 ├── mdmm/
@@ -77,6 +133,7 @@ ADC_effect_training/
 │   ├── rnd_thr_*/                        Stage 1 (non-MDMM) threshold-search eval + GIFs
 │   ├── transformer_eval_*/               Stage 1 (non-MDMM) prediction eval
 │   ├── part1p5/ , part2/ , part2p5/      Stage 1.5/2/2.5 eval + plotting (mirrored structure)
+│   ├── part1p5_no_noise/ , part2_no_noise/ , part2p5_no_noise/   same, no-noise condition
 │   ├── comparison_stage2_stage3/         cross-stage overlay plots
 │   └── residual_comparison/              ViT vs Max Conv2D forest-plot comparison, adapted from
 │                                          the prior team's compare-res-3sr-ONEBIG.ipynb pattern
@@ -112,8 +169,12 @@ selection) — most filenames encode this directly.
 | `train_vit_part1_rnd_thr_noise_corr_contained_2ns5ns.py` | Same, 2ns/5ns case. |
 | `train_vit_part1p5_noise_corr_contained_2ns5ns_mdmm_corr1e4.py` | **Stage 1.5**: ViT, thresholds frozen from campaign 4's median, hard-digitized, MDMM. |
 | `train_conv2d_part2_noise_corr_contained_2ns5ns_mdmm_corr1e4.py` | **Stage 2**: plain (unquantized) Conv2D twin of Stage 2.5, same MDMM/thresholds/retry design. Defines `CreatePlainModel` — every QKeras layer swapped for its plain Keras equivalent. |
-| `train_qconv2d_part2p5_noise_corr_contained_2ns5ns_mdmm_corr1e4.py` | **Stage 2.5**: QKeras-quantized Conv2D (`models.models.CreateModel`), `run_eagerly=True` (required — `QSeparableConv2D`'s quantizer calls `.numpy()` internally, which breaks under graph tracing in this QKeras/TF version combination). 0/10 successful attempts, all stuck at val_loss ≈98,980. |
-| `train_qconv2d_part2p5_noise_corr_contained_2ns5ns_no_mdmm.py` | Same Stage 2.5 architecture/thresholds/dataset, **MDMM removed** — diagnostic to isolate whether MDMM itself was interacting badly with quantization-aware training. Result: also 0/10 (all stuck at the same ~98,980 val_loss), ruling out MDMM as the cause — see [Results](#results-2ns5ns). |
+| `train_qconv2d_part2p5_noise_corr_contained_2ns5ns_mdmm_corr1e4.py` | **Stage 2.5**: QKeras-quantized Conv2D (`models.models.CreateModel`), `run_eagerly=True` (required — `QSeparableConv2D`'s quantizer calls `.numpy()` internally, which breaks under graph tracing). Its 0/10 stuck record predates the Keras-2 fix; **not yet rerun with `TF_USE_LEGACY_KERAS=1`** — it still needs that line added before it can work. |
+| `train_qconv2d_part2p5_noise_corr_contained_2ns5ns_no_mdmm.py` | Same Stage 2.5 architecture/thresholds/dataset, **MDMM removed** — diagnostic that ruled out MDMM as the cause of the stuck runs (also 0/10). Superseded: the real cause was the Keras 2/3 issue. Also predates the fix. |
+| `train_vit_part1p5_no_noise_2ns5ns_mdmm_corr1e4.py` | **Stage 1.5, no-noise twin.** Best run `fc8976dc` (-39,321). |
+| `train_conv2d_part2_no_noise_2ns5ns_mdmm_corr1e4.py` | **Stage 2, no-noise twin.** Best run `64d9b19b` (-28,657). Also sets `tf.config.experimental.enable_op_determinism()` after hitting a `CUDNN_STATUS_EXECUTION_FAILED` crash from cuDNN algorithm selection on the MIG partition. |
+| `train_qconv2d_part2p5_no_noise_2ns5ns_mdmm_corr1e4.py` | **Stage 2.5, no-noise twin — the first QConv2D script that actually trains.** Sets `TF_USE_LEGACY_KERAS=1` before any import; otherwise identical to the noisy Stage 2.5 (original loss, plain Nadam, MDMM `1e4`, cold start). Best run `e61b24cc` (-20,864, attempt 1/10). |
+| `generate_tfr_no_noise_contained_2ns5ns.py` | TFRecords for the no-noise condition (`noise=-1`); identical to the corr_noise generator otherwise. |
 | `wrapper2_submit_part1p5.py` | Checks that the DG import swap (`v2p5` → `v3`) has landed in the target training script — a no-op check now, since all scripts are permanently on v3 — then launches Stage 1.5 and syncs its summary into `campaign_records/`. (Originally waited on `wrapper1_swap_v3.py`, a one-time migration script that performed that swap; wrapper1 has since been deleted since its job is permanently done and there was nothing left for it to do.) |
 | `wrapper3_submit_part2p5.py` | Waits for the Stage 1.5 process to appear then exit (not just "is it running," which would misfire on cold start), then launches Stage 2.5. |
 
@@ -147,9 +208,11 @@ selection) — most filenames encode this directly.
 | `transformer_eval_1ns6ns/`, `transformer_eval_2ns5ns/` | Stage 1 prediction eval (non-MDMM) | `eval_transformer_*.py` (residuals/pulls/summary) + `plot_pred_angle_dists_*.py`. The 1ns6ns one is hardcoded to a known-collapsed run (`3b9c78f7`, pre-MDMM) as a worked example of what collapse looks like; the 2ns5ns one takes `--fingerprint` and is neutral (no collapse assumed — its best run, `a43ed7b9`, is genuinely healthy). |
 | `part1p5/` | Stage 1.5 | `eval_part1p5_2ns5ns.py`, `plot_mdmm_state_part1p5_2ns5ns.py`, `plot_pred_angle_dists_part1p5_2ns5ns.py`, `plot_run_losses_part1p5_2ns5ns.py`. |
 | `part2/` | Stage 2 | Same four-script pattern, `CreatePlainModel`-based, no `run_eagerly`. |
-| `part2p5/` | Stage 2.5 | Same four-script pattern, `run_eagerly=True`. All eval output so far is from failed/stuck runs. |
+| `part2p5/` | Stage 2.5 | Same four-script pattern, `run_eagerly=True`. All eval output so far is from failed/stuck (pre-fix) runs. |
+| `part1p5_no_noise/`, `part2_no_noise/` | Stages 1.5/2, no-noise | Same pattern as their corr_noise twins. |
+| `part2p5_no_noise/` | Stage 2.5, no-noise | Same pattern. `plot_run_losses_*` uses an **allowlist** (`INCLUDED_FINGERPRINTS`) rather than an exclusion list — every pre-fix stuck attempt shares this output tree and sits at a wildly different loss scale, so only the real run (`e61b24cc`) is plotted. The eval script sets `TF_USE_LEGACY_KERAS=1`. |
 | `comparison_stage2_stage3/` | cross-stage | `compare_stage2_stage3.py` — Stage 1.5 vs Stage 2 residuals+uncertainty and pull overlays, adapted from das's `performance_plots.ipynb` multi-model overlay pattern. |
-| `residual_comparison/` | cross-stage, cross-dataset | `aggregate_frontend_results.py` — computes mean + shortest-68%-interval residual stats (plus mean predicted-uncertainty) from our own `predictions.csv` outputs, writes `residuals_frontend.json`. `plot_residual_comparison.py` — forest-plot comparison (point + asymmetric 68%-interval bar + translucent predicted-uncertainty band) comparing residual performance across architectures/datasets, with precision variant (full precision / digitized inputs / quantized NN) as a sub-category within each; reads `residuals_frontend.json` and an optional `residuals_pixelav_3sr.json` (raw-charge, pre-CSA reference data pulled from the real `dataset3sr/residuals.json` via `convert_dataset3sr_residuals.py` — see `residuals_pixelav.template.json` for the schema if filling in by hand instead). Adapted from upstream's `read-all-models-2s.ipynb`/`compare-res-3sr-ONEBIG.ipynb` aggregation+plot pattern (copied into `plotting/` for reference, not executed directly — see below). Per collaborator confirmation, neither ViT nor Max Conv2D has a genuine full-precision variant on our own dataset (both always operate on digitized input in some form), so `full_precision_2frames`/`quantized_nn` are currently only populated on the pixelAV side. |
+| `residual_comparison/` | cross-stage, cross-dataset | `aggregate_frontend_results.py` — computes mean + shortest-68%-interval residual stats (plus mean predicted-uncertainty) from our own `predictions.csv` outputs, writes `residuals_frontend.json`. `plot_residual_comparison.py` — forest-plot comparison (point + asymmetric 68%-interval bar + translucent predicted-uncertainty band) comparing residual performance across architectures/datasets, with precision variant (full precision / digitized inputs / quantized NN) as a sub-category within each; reads `residuals_frontend.json` and an optional `residuals_pixelav_3sr.json` (raw-charge, pre-CSA reference data pulled from the real `dataset3sr/residuals.json` via `convert_dataset3sr_residuals.py` — see `residuals_pixelav.template.json` for the schema if filling in by hand instead). Adapted from upstream's `read-all-models-2s.ipynb`/`compare-res-3sr-ONEBIG.ipynb` aggregation+plot pattern (copied into `plotting/` for reference, not executed directly — see below). Per collaborator confirmation, neither ViT nor Max Conv2D has a genuine full-precision variant on our own dataset (both always operate on digitized input in some form), so the full-precision variants are only populated on the pixelAV side. The `4-quantized` variant is populated for `no_noise`/`max_2dconv` from Stage 2.5's `e61b24cc`. |
 
 ## The launch chain (wrapper2-3)
 
@@ -188,16 +251,19 @@ trend-based check (this one, or `EarlyStopping` itself) can express.
 
 ## Status / known gaps
 
-- **Stage 2.5 (QConv2D)**: no valid run yet — 10/10 attempts stuck with MDMM, 10/10 stuck without
-  it too (MDMM ruled out as the cause). Next planned step: inspect per-variable gradients directly
-  (the "gradients do not exist" warning on every quantized-layer bias is the concrete lead) to
-  confirm or rule out a broken gradient path through the bias quantizers, and potentially loosen the
-  4-bit quantizer's `alpha` or add a warm-up period before quantizing.
+- **Stage 2.5 (QConv2D), corr_noise**: ~~stuck~~ **fixed, but not yet rerun.** The blocker was the
+  Keras 2/3 issue (see [Results](#stage-25-qconv2d-root-caused-and-fixed)), proven fixed on the
+  no-noise twin. The two noisy Stage 2.5 scripts still need `TF_USE_LEGACY_KERAS=1` added and
+  relaunching — this is the single highest-value next run, and should complete the results table.
 - **1ns/6ns**: has Stage 1 threshold-search results (both MDMM and non-MDMM) but Stages 1.5/2/2.5
   haven't been run for this case yet. The MDMM Stage-1 campaign orchestrator
   (`mdmm/1ns6ns/run_orchestrator_1ns6ns_mdmm.py`) is built but not launched.
-- **Comparison plot**: only Stage 1.5 vs Stage 2 exists so far (`plotting/comparison_stage2_stage3/`).
-  Add Stage 2.5 once it has a result.
+- **Comparison plot**: `plotting/comparison_stage2_stage3/` still covers only Stage 1.5 vs Stage 2.
+  `plotting/residual_comparison/` does now include Stage 2.5 (no-noise, `e61b24cc`) as the
+  `4-quantized` variant.
+- **`wrong_qconv_fixes/`**: untracked (gitignored) archive of the superseded QConv2D fix attempts —
+  the warm-start script and its eval, the reverted `losses/loss.py` dead-zone patch, and the eval
+  outputs of the stuck runs. Kept locally for reference; deliberately not part of the repo.
 
 ### Fingerprint collision (cosmetic, not a bug)
 

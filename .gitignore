@@ -51,3 +51,10 @@ runLOG*.txt
 # first. residuals_frontend.json (our own generated data) is NOT covered by this.
 ADC_effect_training/plotting/residual_comparison/dataset3sr_residuals_raw.json
 ADC_effect_training/plotting/residual_comparison/residuals_pixelav_3sr.json
+
+# Superseded QConv2D fix attempts, kept locally for reference only. These are the
+# things tried BEFORE the real cause (QKeras needing Keras 2 -- see
+# ADC_effect_training/README.md) was found: the warm-start script and its eval, the
+# reverted losses/loss.py dead-zone patch, and the eval outputs of the stuck runs.
+# None of it is part of the working pipeline.
+wrong_qconv_fixes/
