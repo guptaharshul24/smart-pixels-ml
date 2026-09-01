@@ -1,0 +1,5 @@
+run fc8976dc (Part 1.5 no-noise (ViT, frozen hard-digitized thresholds, MDMM) 2ns/5ns), checkpoint weights.1060-t-39593.39-v-39321.33.weights.h5
+x    : residual mean = +0.2497, std = 6.5701  (scale 123.6133)
+y    : residual mean = -0.1112, std = 1.9193  (scale 31.0050)
+cotA : residual mean = +0.0034, std = 0.2343  (scale 6.5124)
+cotB : residual mean = +0.0006, std = 0.1063  (scale 1.8465)

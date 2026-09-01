@@ -1,0 +1,5 @@
+run 64d9b19b (Part 2 no-noise (non-quantized Conv2D, frozen hard-digitized thresholds, MDMM) 2ns/5ns), checkpoint weights.4996-t-30161.55-v-28657.14.weights.h5
+x    : residual mean = -0.0349, std = 12.2845  (scale 123.6133)
+y    : residual mean = -0.0734, std = 3.1522  (scale 31.0050)
+cotA : residual mean = -0.0223, std = 0.4751  (scale 6.5124)
+cotB : residual mean = -0.0033, std = 0.1745  (scale 1.8465)
