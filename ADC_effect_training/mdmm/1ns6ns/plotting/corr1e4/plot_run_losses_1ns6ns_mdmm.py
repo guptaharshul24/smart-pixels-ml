@@ -46,14 +46,15 @@ for label, fp, ckpt_dir, color in RUNS:
     axes[0].plot(epochs, losses, label=legend_label, color=color)
     axes[1].plot(epochs, val_losses, label=legend_label, color=color)
 
-axes[0].set_title("Training loss_obj / NLL (MDMM + corr noise + contained + 1ns/6ns)")
-axes[1].set_title("Validation loss / NLL (MDMM + corr noise + contained + 1ns/6ns)")
+axes[0].set_title("Training loss_obj (NLL)")
+axes[1].set_title("Validation loss (NLL)")
 for ax in axes:
     ax.set_xlabel("epoch")
     ax.set_ylabel("loss")
     ax.legend()
     ax.grid(True, alpha=0.3)
 
+fig.suptitle("MDMM + corr noise + contained + 1ns/6ns")
 plt.tight_layout()
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_losses_1ns6ns_mdmm.png")
 plt.savefig(out, dpi=120)

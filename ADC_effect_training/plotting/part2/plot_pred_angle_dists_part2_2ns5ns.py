@@ -38,7 +38,7 @@ for ax, var, name in [(axes[0], "cotA", r"$\cot\alpha$"), (axes[1], "cotB", r"$\
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-fig.suptitle(f"Predicted vs true angle distributions: Part 2 plain Conv2D 2ns/5ns ({fingerprint})")
+fig.suptitle(f"Predicted vs true angle distributions: Part 2 non-quantized Conv2D 2ns/5ns ({fingerprint})")
 plt.tight_layout()
 out = os.path.join(here, fingerprint, "pred_angle_dists.png")
 plt.savefig(out, dpi=120)

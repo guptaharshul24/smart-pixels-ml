@@ -1,17 +1,20 @@
 """
-Part 2 (2ns5ns): plain (non-quantized) Conv2D twin of Part 2.5 -- same
-architecture shape as models.models.CreateModel (SeparableConv2D -> Conv2D ->
-AvgPool -> 3x Dense) but with every QKeras Q-layer/quantizer swapped for its
-plain Keras equivalent. Same frozen, hard-digitized campaign-4 thresholds,
-same MDMM setup, same dataset -- quantization is the only thing this isolates.
+Part 2 (2ns5ns): non-quantized Conv2D twin of Part 2.5 (das's naming:
+Conv2D_Max, vs. Part 2.5's QConv2D_Max -- see train_conv2d_max_part2_only.py
+/ train_qconv2d_max_part2_only.py) -- same architecture shape as
+models.models.CreateModel (SeparableConv2D -> Conv2D -> AvgPool -> 3x Dense)
+but with every QKeras Q-layer/quantizer swapped for its plain Keras
+equivalent. Same frozen, hard-digitized campaign-4 thresholds, same MDMM
+setup, same dataset -- quantization is the only thing this isolates.
 
 Built as das suggested after Part 2.5 (QConv2D) repeatedly got stuck at
-init (val_loss frozen ~98980 regardless of seed): "run the plain first, the
-quantized [version] have reduced expressibility." If this plain model trains
-cleanly where Part 2.5 doesn't, that's strong evidence the 4-bit weight
-quantization (quantized_bits(4,0,1,alpha=1), assuming weights fill ~[-1,1])
-is crushing this architecture's small Glorot-initialized weights at init. If
-this ALSO gets stuck, the problem isn't quantization-specific.
+init (val_loss frozen ~98980 regardless of seed): "run the non-quantized
+version first, the quantized [version] have reduced expressibility." If this
+non-quantized model trains cleanly where Part 2.5 doesn't, that's strong
+evidence the 4-bit weight quantization (quantized_bits(4,0,1,alpha=1),
+assuming weights fill ~[-1,1]) is crushing this architecture's small
+Glorot-initialized weights at init. If this ALSO gets stuck, the problem
+isn't quantization-specific.
 
 No run_eagerly needed here (unlike Part 2.5) -- QSeparableConv2D/QConv2D's
 quantizer is what forces eager mode (.numpy() call breaks under graph
@@ -49,7 +52,7 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-logging.info("--- Part 2 (2ns5ns, plain Conv2D, frozen hard-digitized thresholds) Script Execution Started ---")
+logging.info("--- Part 2 (2ns5ns, non-quantized Conv2D, frozen hard-digitized thresholds) Script Execution Started ---")
 
 # %%
 from DG.OptimizedDataGenerator_v3 import OptimizedDataGenerator
@@ -65,13 +68,13 @@ MDMM_OUTPUT_COLUMNS = {"x": 0, "y": 2, "cotA": 4, "cotB": 6}
 MDMM_LABEL_COLUMNS = {"x": 0, "y": 1, "cotA": 2, "cotB": 3}
 
 # %%
-# Plain (non-quantized) twin of models.models.CreateModel/conv_network/var_network.
+# Non-quantized twin of models.models.CreateModel/conv_network/var_network.
 # Same layer shapes, same L1L2/L2 regularizers, tanh instead of quantized_tanh,
 # no quantizers anywhere. The QActivation("quantized_bits(8,0,alpha=1)") pass
 # between the conv stack and the dense stack in the QKeras version is dropped
 # entirely -- it's a pure quantization step with no unquantized equivalent
 # (an identity op once quantization is removed).
-def plain_conv_network(var, n_filters=5, kernel_size=3):
+def nonquantized_conv_network(var, n_filters=5, kernel_size=3):
     var = SeparableConv2D(
         n_filters, kernel_size,
         depthwise_regularizer=tf.keras.regularizers.L1L2(0.01),
@@ -87,7 +90,7 @@ def plain_conv_network(var, n_filters=5, kernel_size=3):
     var = Activation("tanh")(var)
     return var
 
-def plain_var_network(var, hidden=10, output=2):
+def nonquantized_var_network(var, hidden=10, output=2):
     var = Flatten()(var)
     var = Dense(
         hidden,
@@ -106,16 +109,16 @@ def plain_var_network(var, hidden=10, output=2):
         kernel_regularizer=tf.keras.regularizers.L1L2(0.01),
     )(var)
 
-def CreatePlainModel(shape, output, n_filters, pool_size):
+def CreateNonQuantizedModel(shape, output, n_filters, pool_size):
     x_in = Input(shape)
-    stack = plain_conv_network(x_in, n_filters=n_filters)
+    stack = nonquantized_conv_network(x_in, n_filters=n_filters)
     stack = AveragePooling2D(
         pool_size=(pool_size, pool_size),
         strides=None,
         padding="valid",
         data_format=None,
     )(stack)
-    stack = plain_var_network(stack, hidden=16, output=output)
+    stack = nonquantized_var_network(stack, hidden=16, output=output)
     model = Model(inputs=x_in, outputs=stack)
     return model
 
@@ -210,14 +213,14 @@ def main():
         logging.info(f"=== Part 2 attempt {attempt}/{MAX_RETRIES}, seed={seed}, "
                       f"fingerprint={fingerprint} ===")
 
-        plain_conv = CreatePlainModel(shape=(16, 16, 2), output=14, n_filters=5, pool_size=3)
+        nonquantized_conv = CreateNonQuantizedModel(shape=(16, 16, 2), output=14, n_filters=5, pool_size=3)
         constraints = [
             MinCorrConstraint(column=MDMM_OUTPUT_COLUMNS[p], label_column=MDMM_LABEL_COLUMNS[p],
                               min_value=MDMM_MIN_CORR[p],
                               scale=MDMM_SCALE, damping=MDMM_DAMPING, name=f"corr_{p}")
             for p in ("x", "y", "cotA", "cotB")
         ]
-        model = MDMM(plain_conv, constraints, constraint_samples=MDMM_CONSTRAINT_SAMPLES, name="mdmm_part2_conv2d")
+        model = MDMM(nonquantized_conv, constraints, constraint_samples=MDMM_CONSTRAINT_SAMPLES, name="mdmm_conv2d_max_nonquantized")
         model.compile(
             optimizer=tf.keras.optimizers.Nadam(learning_rate=1e-3),
             loss=custom_loss,

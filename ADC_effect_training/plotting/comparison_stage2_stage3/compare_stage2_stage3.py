@@ -1,5 +1,5 @@
 """
-Stage 2 (ViT, Part 1.5) vs Stage 3 (plain Conv2D, Part 2) comparison, 2ns/5ns.
+Stage 2 (ViT, Part 1.5) vs Stage 3 (non-quantized Conv2D, Part 2) comparison, 2ns/5ns.
 Overlays both models' residuals+uncertainty bands and pull distributions on
 shared axes -- adapted from das's performance_plots.ipynb multi-model overlay
 pattern (residual_plot/residual_plot_deg binned-mean + sigma-band style).
@@ -27,7 +27,7 @@ repo_root = os.path.abspath(os.path.join(here, "..", "..", ".."))
 STAGE2_CSV = os.path.join(repo_root, "ADC_effect_training/plotting/part1p5/00bbfea6/predictions.csv")
 STAGE3_CSV = os.path.join(repo_root, "ADC_effect_training/plotting/part2/986827aa/predictions.csv")
 STAGE2_LABEL = "Stage 2: ViT (Part 1.5)"
-STAGE3_LABEL = "Stage 3: plain Conv2D (Part 2)"
+STAGE3_LABEL = "Stage 3: non-quantized Conv2D (Part 2)"
 STAGE2_COLOR = "tab:red"
 STAGE3_COLOR = "tab:blue"
 
@@ -110,7 +110,7 @@ axes[1][1].axhline(0, alpha=0.4, ls='dashed', color='gray')
 axes[1][1].set_title(r'$\beta$ residual + uncertainty')
 axes[1][1].legend(loc='upper left', fontsize=8)
 
-fig.suptitle("Stage 2 (ViT) vs Stage 3 (plain Conv2D): residuals + uncertainty, 2ns/5ns", y=1.0)
+fig.suptitle("Stage 2 (ViT) vs Stage 3 (non-quantized Conv2D): residuals + uncertainty, 2ns/5ns", y=1.0)
 out1 = os.path.join(here, "residuals_stage2_vs_stage3.png")
 plt.savefig(out1, dpi=120, bbox_inches='tight')
 plt.close()
@@ -140,7 +140,7 @@ for var, name, ax in [('pullx', r'$x$ pull', axes[0][0]), ('pully', r'$y$ pull',
                        ('pullcotA', r'$\cot\alpha$ pull', axes[1][0]), ('pullcotB', r'$\cot\beta$ pull', axes[1][1])]:
     pull_plot(ax, df2, var, name, STAGE2_COLOR, STAGE2_LABEL)
     pull_plot(ax, df3, var, name, STAGE3_COLOR, STAGE3_LABEL)
-fig.suptitle("Stage 2 (ViT) vs Stage 3 (plain Conv2D): pulls, 2ns/5ns")
+fig.suptitle("Stage 2 (ViT) vs Stage 3 (non-quantized Conv2D): pulls, 2ns/5ns")
 plt.tight_layout()
 out2 = os.path.join(here, "pulls_stage2_vs_stage3.png")
 plt.savefig(out2, dpi=120)

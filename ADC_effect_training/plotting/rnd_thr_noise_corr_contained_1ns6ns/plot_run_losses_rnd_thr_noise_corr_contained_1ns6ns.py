@@ -44,14 +44,15 @@ for label, fp, ckpt_dir, color in RUNS:
     axes[0].plot(epochs, losses, label=legend_label, color=color)
     axes[1].plot(epochs, val_losses, label=legend_label, color=color)
 
-axes[0].set_title("Training loss (correlated noise + contained, 5000ep target)")
-axes[1].set_title("Validation loss (correlated noise + contained, 5000ep target)")
+axes[0].set_title("Training loss")
+axes[1].set_title("Validation loss")
 for ax in axes:
     ax.set_xlabel("epoch")
     ax.set_ylabel("loss")
     ax.legend()
     ax.grid(True, alpha=0.3)
 
+fig.suptitle("Corr noise + contained, 5000ep target (1ns/6ns)")
 plt.tight_layout()
 out = "/home/harshul-cern/harshul/smart-pixels-ml/ADC_effect_training/plotting/rnd_thr_noise_corr_contained_1ns6ns/run_losses_rnd_thr_noise_corr_contained_1ns6ns.png"
 plt.savefig(out, dpi=120)

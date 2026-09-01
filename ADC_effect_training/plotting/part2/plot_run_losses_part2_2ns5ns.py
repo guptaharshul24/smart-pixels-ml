@@ -1,5 +1,5 @@
 """
-Train/val loss curves for Part 2 (2ns5ns, plain Conv2D) runs -- same two-panel
+Train/val loss curves for Part 2 (2ns5ns, non-quantized Conv2D) runs -- same two-panel
 layout as Part 1/Part 1.5/Part 2.5's loss plots. Thresholds are frozen
 constants in Part 2 (nothing analogous to Part 1's threshold-evolution plot)
 -- loss is the only per-epoch trajectory worth tracking here. "loss_obj"
@@ -48,14 +48,15 @@ for i, log_path in enumerate(sorted(log_paths, key=os.path.getctime)):
 if not plotted_any:
     raise SystemExit("No MDMM runs found under Part 2 output dir yet.")
 
-axes[0].set_title("Training loss_obj / NLL (Part 2, plain Conv2D, frozen hard-digitized thresholds, 2ns/5ns)")
-axes[1].set_title("Validation loss / NLL (Part 2, plain Conv2D, frozen hard-digitized thresholds, 2ns/5ns)")
+axes[0].set_title("Training loss_obj (NLL)")
+axes[1].set_title("Validation loss (NLL)")
 for ax in axes:
     ax.set_xlabel("epoch")
     ax.set_ylabel("loss")
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
+fig.suptitle("Part 2, non-quantized Conv2D, frozen hard-digitized thresholds, 2ns/5ns")
 plt.tight_layout()
 out_path = os.path.join(out, "run_losses_part2_2ns5ns.png")
 plt.savefig(out_path, dpi=120)

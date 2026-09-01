@@ -51,14 +51,15 @@ for i, log_path in enumerate(sorted(log_paths, key=os.path.getctime)):
 if not plotted_any:
     raise SystemExit("No MDMM runs found under Part 2.5 output dir yet.")
 
-axes[0].set_title("Training loss_obj / NLL (Part 2.5, QConv2D, frozen hard-digitized thresholds, 2ns/5ns)")
-axes[1].set_title("Validation loss / NLL (Part 2.5, QConv2D, frozen hard-digitized thresholds, 2ns/5ns)")
+axes[0].set_title("Training loss_obj (NLL)")
+axes[1].set_title("Validation loss (NLL)")
 for ax in axes:
     ax.set_xlabel("epoch")
     ax.set_ylabel("loss")
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
+fig.suptitle("Part 2.5, QConv2D, frozen hard-digitized thresholds, 2ns/5ns")
 plt.tight_layout()
 out_path = os.path.join(out, "run_losses_part2p5_2ns5ns.png")
 plt.savefig(out_path, dpi=120)

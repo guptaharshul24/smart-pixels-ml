@@ -1,8 +1,9 @@
 """
-Evaluate a Part 2 (2ns5ns) plain Conv2D run: residuals, pulls, sigma hists, and
-summary (money) plots. Same pattern as plotting/part2p5/eval_part2p5_2ns5ns.py,
-adapted for train_conv2d_part2_...'s CreatePlainModel instead of the QKeras
-CreateModel -- no run_eagerly needed (plain Keras layers, no QKeras .numpy() bug).
+Evaluate a Part 2 (2ns5ns) non-quantized Conv2D run (das's naming: Conv2D_Max):
+residuals, pulls, sigma hists, and summary (money) plots. Same pattern as
+plotting/part2p5/eval_part2p5_2ns5ns.py, adapted for train_conv2d_part2_...'s
+CreateNonQuantizedModel instead of the QKeras CreateModel -- no run_eagerly
+needed (plain Keras layers, no QKeras .numpy() bug).
 """
 import os
 import sys
@@ -31,7 +32,7 @@ utils.check_GPU()
 
 from DG.OptimizedDataGenerator_v3 import OptimizedDataGenerator
 from losses.loss import custom_loss
-from train_conv2d_part2_noise_corr_contained_2ns5ns_mdmm_corr1e4 import CreatePlainModel
+from train_conv2d_part2_noise_corr_contained_2ns5ns_mdmm_corr1e4 import CreateNonQuantizedModel
 
 pi = 3.14159265359
 minval = 1e-9
@@ -42,7 +43,7 @@ campaign4_dir = os.path.join(dataset_base_dir, "trained_models_2_5_noise_corr_co
 part2_output_dir = os.path.join(campaign4_dir, "part2_conv2d")
 tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files_2_5_noise_corr_contained", "TFR_val")
 out_base = os.path.dirname(os.path.abspath(__file__))
-CASE_TAG = "Part 2 (plain Conv2D, frozen hard-digitized thresholds, MDMM) 2ns/5ns"
+CASE_TAG = "Part 2 (non-quantized Conv2D, frozen hard-digitized thresholds, MDMM) 2ns/5ns"
 
 # ----------------------------------------------------------- run selection
 parser = argparse.ArgumentParser()
@@ -68,7 +69,7 @@ plot_dir = os.path.join(out_base, fingerprint)
 os.makedirs(plot_dir, exist_ok=True)
 
 # --------------------------------------------------- build model + load weights
-model = CreatePlainModel(shape=(16, 16, 2), output=14, n_filters=5, pool_size=3)
+model = CreateNonQuantizedModel(shape=(16, 16, 2), output=14, n_filters=5, pool_size=3)
 model.compile(optimizer=tf.keras.optimizers.Nadam(learning_rate=1e-3), loss=custom_loss)
 
 checkpoints_dir = os.path.join(record["checkpoint_dir"], "checkpoints")

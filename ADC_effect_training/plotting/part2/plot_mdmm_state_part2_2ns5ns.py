@@ -1,5 +1,5 @@
 """
-MDMM constraint-penalty curves for Part 2 (2ns5ns, plain Conv2D) runs -- the
+MDMM constraint-penalty curves for Part 2 (2ns5ns, non-quantized Conv2D) runs -- the
 analog of Part 1's threshold-evolution plot, but tracking the correlation-
 constraint penalty per parameter instead (thresholds are frozen constants
 in Part 2, nothing to plot there). Reads the pen_corr_x/y/cotA/cotB columns
@@ -44,7 +44,7 @@ for ax, p in zip(axes.flat, params):
     ax.set_ylabel("penalty (-> 0 once constraint satisfied)")
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8)
-fig.suptitle("Part 2 (plain Conv2D) 2ns/5ns: MDMM correlation-constraint penalties per parameter")
+fig.suptitle("Part 2 (non-quantized Conv2D) 2ns/5ns: MDMM correlation-constraint penalties per parameter")
 plt.tight_layout()
 out_path = os.path.join(out, "mdmm_state_part2_2ns5ns.png")
 plt.savefig(out_path, dpi=120)
