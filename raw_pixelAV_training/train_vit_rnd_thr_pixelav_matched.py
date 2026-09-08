@@ -1,19 +1,48 @@
 # %%
+"""
+Stage 1 (ViT, trainable SoftQuantizeLayer threshold search) on the
+pixelAV-matched dataset (dataset_3srb_16x16_50x12P5_centeredIncidence --
+containment + |cotBeta|<2, 155k train / 40k val, noise=[0,80] e- i.i.d.,
+time slices [0,19] -- first and last of pixelAV's 20, NOT the [10,25]
+"2ns/5ns" pair used for our own frontend dataset, see
+generate_tfr_pixelav_matched.py's docstring).
+
+Adapted from train_vit_part1_rnd_thr_noise_corr_contained_2ns5ns.py.
+Differences from that template:
+  - Points at the pixelAV-matched TFR set instead of our own frontend one.
+  - Threshold init sampling range is ELECTRON-scale (raw pixelAV charge
+    units), not mV -- checked directly (2026-09-02): per-pixel nonzero
+    charge in slice 0 has p50~82, p90~459 e-; slice 19 has p50~1149,
+    p90~3993 e-. sample_low/sample_high set to [50, 3000] accordingly, a
+    generic reasonable range spanning both slices' scale (thresholds are
+    trainable, so the init just needs to be the right order of magnitude,
+    not exact).
+  - TARGET_RUNS=5 (bumped from an initial 1-round confirmatory run,
+    2026-09-02: das provided a previous-studies reference [248, 668, 1663]
+    e-, and our first run's converged thresholds [240, 636, 1589] sat
+    consistently below it by ~3-5% / 3-9 sigma of das's reported spread --
+    a real, same-direction offset, not run-to-run noise. 5 runs matches
+    campaign 4's convention against our own dataset, to get a proper
+    median + scatter estimate before concluding anything from the gap.
+    Resumable: rerunning this script picks up from
+    threshold_runs_pixelav_matched.jsonl's existing entries and only
+    launches the remaining runs needed to reach TARGET_RUNS.
+  - Independent seed pool, unrelated to the shared 20260627 pool used by
+    every campaign against our own dataset (this is a different dataset).
+"""
 import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow.keras import layers
 import keras
 from keras.layers import *
-# NOTE (2026-09-03): `from qkeras import *` was removed here -- dead weight,
-# this pure-ViT script uses no QKeras symbol. Hygiene only, not the fix; see
-# the fuller note in ../2ns5ns/train_loop_rnd_thr_noise_corr_contained_2ns5ns_mdmm.py
-# and models/mdmm.py's module docstring for the actual Keras-runtime fix.
+from qkeras import *
 
 from keras.callbacks import CSVLogger
 
 import os
 import sys
 import random
+import secrets
 import json
 import glob
 import re
@@ -21,42 +50,34 @@ from datetime import datetime
 import logging
 import csv
 import time
-import numpy as np # Added for seeding
+import numpy as np
 
-# DG/losses/models live at the repo root, one level up from this ADC_effect_training/ dir
-_repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
-sys.path.insert(0, _repo_root)
+# DG/losses/models live at the repo root, one level up from this raw_pixelAV_training/ dir
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import utils
-# Without this, TF grabs a large upfront chunk of GPU memory (not on-demand) on first use --
-# fine in isolation, but on this shared 5GB MIG slice it races with a just-killed process's
-# not-yet-fully-reclaimed allocation, causing a same-process-restart OOM (observed 2026-06-29).
 utils.check_GPU()
 
-# --- LOGGING CONFIGURATION ---
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("runLOG_rnd_thr_noise_corr_contained_1ns6ns_mdmm.txt"),
+        logging.FileHandler("runLOG_pixelav_matched_rnd_thr.txt"),
         logging.StreamHandler()
     ]
 )
-logging.info("--- Script Execution Started (correlated noise + contained-cluster filter + 1ns/6ns time slices + 5000-epoch + MDMM angle-spread constraints variant) ---")
+logging.info("--- Script Execution Started (pixelAV-matched, Stage 1 ViT threshold search, 5-run campaign) ---")
 
 pi = 3.14159265359
 maxval=1e9
 minval=1e-9
 
-# %%
 from DG.OptimizedDataGenerator_v3 import OptimizedDataGenerator
 from losses.loss import custom_loss
 from models.SoftQuantizeLayer import SoftQuantizeLayer
 from models.AnnealingScheduler import AnnealingScheduler
-from models.mdmm import MDMM, MinStdConstraint, MinMadConstraint, MinCorrConstraint
 
 # %%
-# Transformer model (identical architecture to train_loop_rnd_thr_noise_corr_contained.py)
 class PatchExtractor(layers.Layer):
   """Extract 2D patches from images."""
   def __init__(self, patch_size=(3,7)):
@@ -130,7 +151,7 @@ def create_vit_model(input_shape=(16,16,2),
                      dropout=0.1,
                      final_outputs=14,
                      initial_thresholds=None,
-                     threshold_offset=80):
+                     threshold_offset=0.0):
   inp = layers.Input(shape=input_shape, name="raw_input")
   q_out = SoftQuantizeLayer(
       n_bits=2,
@@ -164,101 +185,42 @@ def create_vit_model(input_shape=(16,16,2),
   return model
 
 # %%
-# Dataset and TFRecord paths -- correlated-noise TFRecords built from the contained-cluster
-# (original_atEdge==False) parquet pool, time slices 1ns (index 5) and 6ns (index 30)
 logging.info("--- DATASET CONFIGURATION ---")
-dataset_base_dir = '/home/harshul-cern/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence_10ps_300k_convolved_to_200ps/shuffled_3d'
+dataset_base_dir = '/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence'
 
 logging.info(f"Dataset base directory: {dataset_base_dir}")
 
-tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files_1_6_noise_corr_contained")
+tfrecords_base_dir = os.path.join(dataset_base_dir, "TFR_files", "2t_N_0.0mu_80.0sig_NoLog_Stdr")
 tfrecords_dir_train = os.path.join(tfrecords_base_dir, "TFR_train")
 tfrecords_dir_val   = os.path.join(tfrecords_base_dir, "TFR_val")
 
 logging.info(f"Training TFRecords directory: {tfrecords_dir_train}")
 logging.info(f"Validation TFRecords directory: {tfrecords_dir_val}")
 
-os.makedirs(tfrecords_dir_train, exist_ok=True)
-os.makedirs(tfrecords_dir_val, exist_ok=True)
-
 # %%
-# --- RUN COUNT, RESUMABILITY, AND STUCK-RUN HANDLING ---
 EPOCHS = 5000
 TARGET_RUNS = 5
-# No fixed seed pool: the orchestrator draws each run's seed from OS entropy and
-# every seed is journaled to the JSONL at run START (status="started"), so the
-# JSONL alone is sufficient to resume/audit the campaign. Individual runs stay
-# reproducible because fingerprint/init-thresholds derive deterministically from
-# the seed.
-TIME_STAMPS = [5, 30]   # 1ns and 6ns (0.2 ns/index; index 5 = 1ns, index 30 = 6ns)
+# Seeds are drawn fresh at run time (secrets.randbits, see the orchestrator
+# loop below), not pre-generated from a fixed RNG seed -- avoids the
+# deterministic-seed-pool fingerprint collision documented in
+# ADC_effect_training/README.md (two non-MDMM Stage-1 campaigns sharing
+# np.random.default_rng(20260627) draw identical seeds at the same
+# run_index). Matches the MDMM orchestrators' secrets.randbits(31) pattern.
+TIME_STAMPS = [0, 19]   # first and last of pixelAV's 20 raw slices
 STUCK_THRESHOLD = 1e5
 STUCK_PATIENCE = 20
 ESCAPE_BELOW = 5e4
 
-# --- MDMM output-spread constraints ---
-# All 5 plain 1ns6ns runs collapsed to constant angle predictions (predicted std
-# ~0.0004 vs true std ~0.53 for cotA). Constrain std(pred) >= 0.8 * true std for
-# each regressed parameter (normalized units, true stds measured on TFR_val:
-# x 0.4495, y 0.4495, cotA 0.5316, cotB 0.4484). One Lagrange multiplier per
-# parameter; x/y start satisfied so their lambdas stay ~0.
-# Scale sized against the NLL magnitude (~26k): at scale 1.0 the constraint was
-# ~25x too weak -- the scale1 campaign (archived as *_mdmm_scale1) showed lambda
-# ratcheting all 5000 epochs (Nadam caps ascent at ~lr/step) while cotA stayed
-# collapsed and cotB crept up far too slowly. At 1e4 the damping term is ~3% of
-# the NLL at full violation and each unit of lambda is worth 1e4, so effective
-# pressure reaches NLL scale within tens of epochs (while k is still soft).
-MDMM_SCALE = 1e4
-MDMM_DAMPING = 1.0
-# GPU UPGRADE (2026-07-13): was capped at 128 because the deterministic second
-# forward pass (needed for the constraint) OOM'd at full batch (5000) on the old
-# 1g.5gb MIG slice (1/7 compute, 5GB) -- that pass allocates ~3.4-4.7GB on top of
-# the ~3.2GB primary training pass, more than the 5GB slice had free. Now running
-# on a 7g.40gb slice (full GPU, all 7/7 compute + 40GB), so use the FULL batch:
-# exact correlation per epoch instead of a 128-sample estimate, no OOM risk.
-MDMM_CONSTRAINT_SAMPLES = None  # None = use the full batch (no subsampling)
-# superseded -- std is outlier-gameable: run 438bcf1c kept ~99.7% of predictions
-# at the collapsed constant and inflated batch std past target with ~0.3% extreme
-# outliers (std is quadratically outlier-sensitive):
-# MDMM_MIN_STD = {"x": 0.36, "y": 0.36, "cotA": 0.43, "cotB": 0.36}
-# MAD targets = 0.8 * true mean-absolute-deviation of the normalized labels
-# (true MADs on TFR_val: x 0.384, y 0.386, cotA 0.458, cotB 0.384). MAD is only
-# linearly outlier-sensitive, so the BULK of predictions must spread
-# (collaborator-suggested metric, wrapped in the MDMM lambda machinery).
-# superseded -- MAD forced dispersion but achieved ~0 correlation with truth on
-# both completed MAD-1e4 runs (eabfe9f3, 4c28f1e8: cotA/cotB corr 0.0004/-0.014
-# and -0.0006/0.006 respectively, statistically identical to the fully collapsed
-# baseline's 0.002/-0.013). An outlier tail can buy dispersion without any
-# truth-dependence -- see MinMadConstraint docstring.
-# MDMM_MIN_MAD = {"x": 0.31, "y": 0.31, "cotA": 0.37, "cotB": 0.31}
-# Truth-aware floor: Pearson corr(pred, true) >= 0.5 per parameter. Healthy runs
-# sit at 0.98-0.996 on angles and ~0.99 on x/y (measured on the non-MDMM healthy
-# run a43ed7b9), so 0.5 only has to evict the model from zero-correlation
-# collapse -- it forbids every cheat seen so far (constant, outlier-salted,
-# spread-but-uncorrelated) since none of them can fake correlation with the label.
-MDMM_MIN_CORR = {"x": 0.5, "y": 0.5, "cotA": 0.5, "cotB": 0.5}
-MDMM_OUTPUT_COLUMNS = {"x": 0, "y": 2, "cotA": 4, "cotB": 6}
-MDMM_LABEL_COLUMNS = {"x": 0, "y": 1, "cotA": 2, "cotB": 3}
-
-trained_models_dir = os.path.join(dataset_base_dir, "trained_models_1_6_noise_corr_contained_mdmm")
+trained_models_dir = os.path.join(dataset_base_dir, "trained_models_rnd_thr")
 os.makedirs(trained_models_dir, exist_ok=True)
-threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_rnd_thr_noise_corr_contained_mdmm.jsonl")
-median_thresholds_path = os.path.join(trained_models_dir, "median_thresholds_rnd_thr_noise_corr_contained_mdmm.json")
-
-
-def load_events():
-    if not os.path.exists(threshold_runs_path):
-        return []
-    return [json.loads(l) for l in open(threshold_runs_path) if l.strip()]
-
-
-def append_event(rec):
-    with open(threshold_runs_path, "a") as f:
-        f.write(json.dumps(rec) + "\n")
+threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_pixelav_matched.jsonl")
+median_thresholds_path = os.path.join(trained_models_dir, "median_thresholds_pixelav_matched.json")
 
 
 def load_collected():
-    # completed runs only (records without a status field are legacy = completed)
-    return [r for r in load_events() if r.get("status", "completed") == "completed"]
+    if not os.path.exists(threshold_runs_path):
+        return []
+    return [json.loads(l) for l in open(threshold_runs_path) if l.strip()]
 
 
 def running_median():
@@ -279,8 +241,6 @@ class SoftQuantizeLoggerCallback(tf.keras.callbacks.Callback):
 
     def on_train_begin(self, logs=None):
         os.makedirs(os.path.dirname(self.log_filepath), exist_ok=True)
-        # Resuming a run: file already has a header+rows from before the interruption --
-        # don't let on_epoch_end's header_written check re-open (and truncate) it.
         if os.path.exists(self.log_filepath) and os.path.getsize(self.log_filepath) > 0:
             self.header_written = True
 
@@ -319,58 +279,8 @@ class SoftQuantizeLoggerCallback(tf.keras.callbacks.Callback):
         with open(self.log_filepath, "a", newline="") as f:
             csv.writer(f).writerow(row)
 
-class MDMMStateLoggerCallback(tf.keras.callbacks.Callback):
-    """Per-epoch log of each constraint's lambda and the predicted output spreads
-    (computed on one cached validation batch) -- shows the constraints engaging
-    (lambda rising while collapsed) and releasing (infeasibility -> 0)."""
-    def __init__(self, log_filepath, constraints, sample_inputs, sample_labels, inner_model):
-        super().__init__()
-        self.log_filepath = log_filepath
-        self.constraints = constraints
-        self.sample_inputs = sample_inputs
-        self.sample_labels = sample_labels
-        self.inner_model = inner_model
-        self.header_written = False
-
-    def on_train_begin(self, logs=None):
-        os.makedirs(os.path.dirname(self.log_filepath), exist_ok=True)
-        if os.path.exists(self.log_filepath) and os.path.getsize(self.log_filepath) > 0:
-            self.header_written = True
-
-    def on_epoch_end(self, epoch, logs=None):
-        preds = self.inner_model(self.sample_inputs, training=False).numpy()
-        stds = {name: float(preds[:, col].std())
-                for name, col in MDMM_OUTPUT_COLUMNS.items()}
-        # std kept as an outlier-salting diagnostic (see MinMadConstraint/MinStdConstraint
-        # docstrings): a healthy correlated prediction has std close to the true std, so
-        # std blowing up relative to the label's true spread flags a gaming attempt again.
-        # corr is the constrained metric now.
-        corrs = {}
-        for name, col in MDMM_OUTPUT_COLUMNS.items():
-            p_col = preds[:, col]
-            t_col = self.sample_labels[:, MDMM_LABEL_COLUMNS[name]]
-            denom = p_col.std() * t_col.std() + 1e-6
-            corrs[name] = float(np.mean((p_col - p_col.mean()) * (t_col - t_col.mean())) / denom)
-        lmbdas = {c.name: float(c.lmbda.numpy()) for c in self.constraints}
-
-        if not self.header_written:
-            header = (["epoch"] +
-                      [f"lmbda_{n}" for n in lmbdas] +
-                      [f"pred_std_{n}" for n in stds] +
-                      [f"pred_corr_{n}" for n in corrs])
-            with open(self.log_filepath, "w", newline="") as f:
-                csv.writer(f).writerow(header)
-            self.header_written = True
-
-        with open(self.log_filepath, "a", newline="") as f:
-            csv.writer(f).writerow([epoch] + list(lmbdas.values())
-                                   + list(stds.values()) + list(corrs.values()))
-
-
 class AbortOnStuck(tf.keras.callbacks.Callback):
-    """
-    Stop training early if val_loss stays > `threshold` for `patience` consecutive epochs.
-    """
+    """Stop training early if val_loss stays > `threshold` for `patience` consecutive epochs."""
     def __init__(self, threshold=1e5, patience=3):
         super().__init__()
         self.thr = threshold
@@ -382,8 +292,8 @@ class AbortOnStuck(tf.keras.callbacks.Callback):
         if vloss > self.thr or not np.isfinite(vloss):
             self.bad += 1
             if self.bad >= self.pat:
-                print(f"[AbortOnStuck] val_loss {vloss:.1f} ≥ {self.thr} "
-                      f"for {self.pat} epochs — aborting run.")
+                print(f"[AbortOnStuck] val_loss {vloss:.1f} >= {self.thr} "
+                      f"for {self.pat} epochs -- aborting run.")
                 self.model.stop_training = True
         else:
             self.bad = 0
@@ -402,30 +312,11 @@ def main(seed, run_index):
 
     num_thresholds = 3
     threshold_offset = 0.0
-    sample_low, sample_high = 12.0, 160.0
+    # electron-scale (raw pixelAV charge), not mV -- see module docstring
+    sample_low, sample_high = 50.0, 3000.0
     random_thresholds = sample_thresholds(seed, sample_low, sample_high, num_thresholds)
     thr_low, thr_high = min(random_thresholds), max(random_thresholds)
-    logging.info(f"Initial thresholds (random, sampled in [{sample_low}, {sample_high}]): {random_thresholds}")
-
-    append_event({
-        "status": "started",
-        "run_index": run_index,
-        "seed": seed,
-        "fingerprint": fingerprint,
-        "timestamp": timestamp,
-        "init_thresholds": random_thresholds,
-        "thr_low": thr_low,
-        "thr_high": thr_high,
-        "time_stamps": TIME_STAMPS,
-        "mdmm": {
-            "scale": MDMM_SCALE,
-            "damping": MDMM_DAMPING,
-            # "min_std": MDMM_MIN_STD,  # superseded by min_mad
-            # "min_mad": MDMM_MIN_MAD,  # superseded by min_corr
-            "min_corr": MDMM_MIN_CORR,
-            "constraint_samples": MDMM_CONSTRAINT_SAMPLES,
-        },
-    })
+    logging.info(f"Initial thresholds (random, sampled in [{sample_low}, {sample_high}] e-): {random_thresholds}")
 
     logging.info("Creating Vision Transformer (ViT) model...")
     model_params = {
@@ -440,33 +331,8 @@ def main(seed, run_index):
         'initial_thresholds': random_thresholds,
         'threshold_offset': threshold_offset
     }
-    vit = create_vit_model(**model_params)
-    # superseded std-only version (gamed by outlier-salting, run 438bcf1c):
-    # constraints = [
-    #     MinStdConstraint(column=MDMM_OUTPUT_COLUMNS[p], min_value=MDMM_MIN_STD[p],
-    #                      scale=MDMM_SCALE, damping=MDMM_DAMPING, name=f"std_{p}")
-    #     for p in ("x", "y", "cotA", "cotB")
-    # ]
-    # superseded MAD-only version (gamed by outlier-salting -- zero truth
-    # correlation despite satisfying the dispersion floor, see const block above):
-    # constraints = [
-    #     MinMadConstraint(column=MDMM_OUTPUT_COLUMNS[p], min_value=MDMM_MIN_MAD[p],
-    #                      scale=MDMM_SCALE, damping=MDMM_DAMPING, name=f"mad_{p}")
-    #     for p in ("x", "y", "cotA", "cotB")
-    # ]
-    constraints = [
-        MinCorrConstraint(column=MDMM_OUTPUT_COLUMNS[p], label_column=MDMM_LABEL_COLUMNS[p],
-                          min_value=MDMM_MIN_CORR[p],
-                          scale=MDMM_SCALE, damping=MDMM_DAMPING, name=f"corr_{p}")
-        for p in ("x", "y", "cotA", "cotB")
-    ]
-    model = MDMM(vit, constraints, constraint_samples=MDMM_CONSTRAINT_SAMPLES, name="mdmm_vit")
+    model = create_vit_model(**model_params)
     logging.info(f"Model created with parameters: {model_params}")
-    # old (std campaign): logging.info(f"MDMM constraints: min std {MDMM_MIN_STD} ...")
-    # old (MAD campaign): logging.info(f"MDMM constraints: min MAD {MDMM_MIN_MAD} ...")
-    logging.info(f"MDMM constraints: min corr {MDMM_MIN_CORR} on output columns "
-                 f"{MDMM_OUTPUT_COLUMNS} vs label columns {MDMM_LABEL_COLUMNS} "
-                 f"(scale={MDMM_SCALE}, damping={MDMM_DAMPING})")
     model.summary(print_fn=logging.info)
 
     logging.info("Compiling model...")
@@ -492,7 +358,7 @@ def main(seed, run_index):
     )
     logging.info("Training generator created.")
 
-    base_dir = f'{trained_models_dir}/2t_rnd_thr_noise_corr_contained_mdmm_5000ep_NoLog_Stdr_4p0_ThOf{threshold_offset}_ThL{thr_low}_ThH{thr_high}/Transformer_model-{fingerprint}-checkpoints'
+    base_dir = f'{trained_models_dir}/1t_rnd_thr_pixelav_matched_5000ep_ThOf{threshold_offset}_ThL{thr_low}_ThH{thr_high}/Transformer_model-{fingerprint}-checkpoints'
     logging.info(f"Base output directory: {base_dir}")
     checkpoints_dir = os.path.join(base_dir, 'checkpoints')
     os.makedirs(checkpoints_dir, exist_ok=True)
@@ -524,24 +390,8 @@ def main(seed, run_index):
     logging.info(f"SoftQuantizeLayer state will be logged to: {quantizer_log_path}")
     abort_bad = AbortOnStuck(threshold=STUCK_THRESHOLD, patience=STUCK_PATIENCE)
 
-    mdmm_log_path = f"{base_dir}/mdmm_state_log.csv"
-    sample_inputs, sample_labels = validation_generator[0]
-    sample_labels = np.asarray(sample_labels)
-    mdmm_logger = MDMMStateLoggerCallback(
-        log_filepath=mdmm_log_path,
-        constraints=constraints,
-        sample_inputs=sample_inputs,
-        sample_labels=sample_labels,
-        inner_model=vit,
-    )
-    logging.info(f"MDMM lambdas/spreads will be logged to: {mdmm_log_path}")
+    all_callbacks = [mcp, csv_logger, scheduler_callback, quantizer_logger, abort_bad]
 
-    all_callbacks = [mcp, csv_logger, scheduler_callback, quantizer_logger, mdmm_logger, abort_bad]
-
-    # --- Mid-run resume: base_dir/fingerprint/thresholds are all deterministic functions of
-    # `seed` alone, so a relaunch with the same seed recomputes the same checkpoints_dir. If a
-    # prior (interrupted) attempt already logged epochs here, pick up from the last one instead
-    # of retraining from epoch 0.
     initial_epoch = 0
     if os.path.exists(csv_log_path):
         with open(csv_log_path) as f:
@@ -591,7 +441,6 @@ def main(seed, run_index):
         logging.warning(f"Could not read final thresholds/levels from {quantizer_log_path}: {e}")
 
     rec = {
-        "status": "completed",
         "run_index": run_index,
         "seed": seed,
         "fingerprint": fingerprint,
@@ -608,7 +457,8 @@ def main(seed, run_index):
         "time_stamps": TIME_STAMPS,
         "checkpoint_dir": base_dir,
     }
-    append_event(rec)
+    with open(threshold_runs_path, "a") as f:
+        f.write(json.dumps(rec) + "\n")
     logging.info(f"Run record appended to: {threshold_runs_path} -> {rec}")
 
     if stuck:
@@ -620,16 +470,71 @@ def main(seed, run_index):
     return stuck
 
 if __name__ == "__main__":
+    import subprocess
     import argparse
 
-    # Subprocess-only entry point: one seed per process (GPU memory fully released
-    # on exit). Campaign orchestration -- random seed draws, retries, resume,
-    # median -- lives in run_orchestrator_1ns6ns_mdmm.py.
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--seed', type=int, required=True)
-    parser.add_argument('--run_index', type=int, required=True)
-    args = parser.parse_args()
-    # Uncaught exceptions (OOM, etc.) crash the subprocess with exit code 1 --
-    # the orchestrator detects this via returncode and retries.
-    main(seed=args.seed, run_index=args.run_index)
-    sys.exit(0)
+    if '--seed' in sys.argv:
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--seed', type=int, required=True)
+        parser.add_argument('--run_index', type=int, required=True)
+        args = parser.parse_args()
+        main(seed=args.seed, run_index=args.run_index)
+        sys.exit(0)
+
+    logging.info("Script invoked directly (orchestrator mode). Starting main execution loop.")
+
+    done_seeds = {r["seed"] for r in load_collected()}
+    completed_runs = sum(1 for r in load_collected() if not r.get("stuck", False))
+    if done_seeds:
+        logging.info(f"Resuming: {len(done_seeds)} seed(s) already attempted, "
+                      f"{completed_runs} completed (non-stuck) run(s).")
+
+    MAX_OOM_RETRIES = 3
+    run_index = len(done_seeds)
+    while completed_runs < TARGET_RUNS:
+        run_seed = secrets.randbits(31)
+        while run_seed in done_seeds:  # ~1e-9 odds, but a collision would confuse the journal
+            run_seed = secrets.randbits(31)
+        done_seeds.add(run_seed)
+        oom_retries = 0
+        while True:
+            logging.info(f"Launching subprocess for seed={run_seed}, run_index={run_index} "
+                          f"(attempt {oom_retries + 1}/{MAX_OOM_RETRIES + 1})")
+            result = subprocess.run(
+                [sys.executable, os.path.abspath(__file__),
+                 '--seed', str(run_seed), '--run_index', str(run_index)],
+                env=os.environ.copy()
+            )
+            if result.returncode == 0:
+                new_rec = next((r for r in load_collected() if r['seed'] == run_seed), None)
+                if new_rec is None:
+                    logging.error(f"Subprocess exited 0 but no JSONL record for seed={run_seed}; skipping.")
+                    break
+                stuck = new_rec.get('stuck', False)
+                if not stuck:
+                    completed_runs += 1
+                logging.info(f"--- Completed run {completed_runs}/{TARGET_RUNS} "
+                              f"(run_index={run_index}, seed={run_seed}, stuck={stuck}) ---")
+                break
+            else:
+                oom_retries += 1
+                if oom_retries > MAX_OOM_RETRIES:
+                    logging.error(f"Subprocess failed after {MAX_OOM_RETRIES} retries for "
+                                   f"seed={run_seed} (exit code {result.returncode}); skipping seed.")
+                    break
+                logging.warning(f"Subprocess failed (exit code {result.returncode}) for "
+                                 f"seed={run_seed} (retry {oom_retries}/{MAX_OOM_RETRIES}); waiting 30s.")
+                time.sleep(30)
+        run_index += 1
+
+    med, n = running_median()
+    summary = {
+        "n_runs": n,
+        "median_thresholds": med,
+        "levels": [0.0, 1.0, 2.0, 3.0],
+        "time_stamps": TIME_STAMPS,
+        "note": "median over non-stuck runs; per-run details in threshold_runs_pixelav_matched.jsonl",
+    }
+    with open(median_thresholds_path, "w") as f:
+        json.dump(summary, f, indent=1)
+    logging.info(f"--- Training script completed: {n} runs, median thresholds={med} ---")

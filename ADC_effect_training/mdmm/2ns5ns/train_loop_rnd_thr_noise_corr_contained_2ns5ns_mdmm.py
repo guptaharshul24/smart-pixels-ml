@@ -4,7 +4,16 @@ import tensorflow_probability as tfp
 from tensorflow.keras import layers
 import keras
 from keras.layers import *
-from qkeras import *
+# NOTE (2026-09-03): `from qkeras import *` was removed here -- it was dead
+# weight, this is a pure ViT (SoftQuantizeLayer + MultiHeadAttention/Dense)
+# and uses no QKeras symbol. Removing it is hygiene only, NOT the fix for the
+# Keras-runtime mismatch that broke this script: qkeras still arrives
+# transitively via DG/OptimizedDataGenerator_v3.py (which genuinely needs it),
+# and importing it sets TF_USE_LEGACY_KERAS=1 as a side effect. The actual fix
+# lives in models/mdmm.py, which now follows tf.keras's own resolution instead
+# of re-reading that env var at import time -- see its module docstring for
+# the full explanation. This script runs on Keras 3, the same runtime
+# campaign 4 (2026-07-13..15) actually used, so reruns stay comparable.
 
 from keras.callbacks import CSVLogger
 

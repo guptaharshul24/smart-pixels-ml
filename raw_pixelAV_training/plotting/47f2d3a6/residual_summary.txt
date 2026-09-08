@@ -1,0 +1,5 @@
+run 47f2d3a6 (pixelAV-matched, Stage 1 ViT rnd_thr), checkpoint weights.4892-t-46213.15-v-46592.43.weights.h5
+x    : residual mean = -3.1932, std = 29.7724  (scale 122.8935)
+y    : residual mean = +3.0930, std = 8.3812  (scale 30.9479)
+cotA : residual mean = -0.1089, std = 2.0900  (scale 6.5030)
+cotB : residual mean = +0.0136, std = 0.6061  (scale 1.8711)

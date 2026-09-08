@@ -20,22 +20,39 @@ Differences from the original:
   lambdas are NOT saved in checkpoints; a mid-run resume restarts them from 0 and
   they re-grow wherever the constraint is still violated.
 
-Keras runtime (2026-08-25): this file is shared by every train_*.py (ViT,
-non-quantized Conv2D, AND QConv2D), unlike models/models.py which is QConv2D-
-only. QKeras 0.9.0 requires legacy Keras 2 (tf_keras) -- running it under
-Keras 3 was root-caused as the reason QConv2D's per-layer gradient tracking
-silently breaks (a layer with both kernel_quantizer and bias_quantizer only
-gets a real gradient on one of the two under Keras 3; both work under
-tf_keras -- see models/models.py's comment for the full verification). The
-ViT and non-quantized Conv2D paths never touch QKeras and already work fine
-under Keras 3, so this import is made CONDITIONAL on the TF_USE_LEGACY_KERAS
-env var (set by the QConv2D train_*.py scripts before any TF/Keras import,
-same var tf.keras itself respects) rather than switched unconditionally --
-that keeps every already-working path byte-identical while letting the
-QConv2D path opt into tf_keras. id()-based lambda identification (see above)
-is a plain Python builtin, not Keras-version-specific, and works fine under
-either runtime; add_weight/compute_loss are standard Keras APIs present in
-tf_keras too.
+Keras runtime (2026-08-25, revised 2026-09-03): this file is shared by every
+train_*.py (ViT, non-quantized Conv2D, AND QConv2D), unlike models/models.py
+which is QConv2D-only. QKeras 0.9.0 requires legacy Keras 2 (tf_keras) --
+running it under Keras 3 was root-caused as the reason QConv2D's per-layer
+gradient tracking silently breaks (a layer with both kernel_quantizer and
+bias_quantizer only gets a real gradient on one of the two under Keras 3;
+both work under tf_keras -- see models/models.py's comment for the full
+verification). The ViT and non-quantized Conv2D paths never touch QKeras and
+work fine under Keras 3.
+
+The first version of this fix branched on the TF_USE_LEGACY_KERAS env var
+here. That was subtly wrong and broke every ViT+MDMM script: `import qkeras`
+sets that env var as an import SIDE EFFECT, and qkeras arrives transitively
+via DG/OptimizedDataGenerator_v3.py (`from qkeras import quantized_bits`,
+line 27, genuinely used by QKeras_data_prep_quantizer). So in a ViT script
+the ordering is: tensorflow imported (tf.keras caches to Keras 3, since TF
+reads the var only once at its own first import) -> data generator imported
+(qkeras sets the var to "1") -> this module imported (sees "1", picks
+tf_keras). MDMM then subclassed tf_keras.Model while the script's
+tf.keras.optimizers.Nadam stayed Keras 3, and model.compile() died with
+"Could not interpret optimizer identifier". Campaign 4 (2026-07-13..15)
+predates the conditional entirely, so it was unaffected -- the ViT+MDMM
+scripts simply had not been run between 2026-09-01 (when the conditional
+landed, commit 33f8cd4) and 2026-09-03 (when this was hit).
+
+Deferring to tf.keras instead removes the ordering dependency completely:
+whatever the calling script's tf.keras.* symbols resolve to, MDMM's base
+class matches. Verified both paths: a ViT script (no env var set before TF)
+gets Keras 3 for MDMM, optimizer and callbacks alike; a QConv2D script (env
+var set as its first statement) gets tf_keras for all three. id()-based
+lambda identification (see above) is a plain Python builtin, not
+Keras-version-specific, and works under either runtime; add_weight/
+compute_loss are standard Keras APIs present in both.
 
 Verified end-to-end (2026-08-25): a full cold-start no-noise Part 2.5 run
 under this fix (fp 54d7875b) trained cleanly through 170+ epochs with real,
@@ -48,14 +65,18 @@ under tf_keras through this run: pen_corr_* stayed at 0.0 throughout
 (constraint satisfied, no collapse), unlike every pre-fix attempt where it
 climbed unboundedly.
 """
-import os
 import tensorflow as tf
-if os.environ.get("TF_USE_LEGACY_KERAS") == "1":
-    import tf_keras as keras
-    from tf_keras import layers
-else:
-    import keras
-    from keras import layers
+# Follow whatever tf.keras itself resolved to, rather than re-deciding from
+# TF_USE_LEGACY_KERAS here. See the "Keras runtime (2026-09-03)" note above:
+# reading the env var directly made this module's choice depend on WHEN it was
+# imported relative to qkeras (which sets that var as an import side effect),
+# which is not something this module can control -- and getting it wrong
+# crashes model.compile() with "Could not interpret optimizer identifier".
+# tf.keras is resolved once, at TensorFlow's own first import, so deferring to
+# it guarantees MDMM's base class always matches the runtime the calling
+# script's tf.keras.optimizers/callbacks come from, in every path.
+keras = tf.keras
+layers = tf.keras.layers
 
 
 class OutputConstraint(layers.Layer):
