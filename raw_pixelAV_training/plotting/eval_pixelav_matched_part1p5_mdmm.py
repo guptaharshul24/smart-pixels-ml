@@ -1,15 +1,17 @@
 """
-Evaluate a pixelAV-matched Stage 1 (ViT, trainable SoftQuantizeLayer) run:
-residuals, pulls, and summary (money) plots. Adapted from
-ADC_effect_training/plotting/transformer_eval_2ns5ns/eval_transformer_2ns5ns.py,
-pointed at dataset_3srb_16x16_50x12P5_centeredIncidence instead of our own
-frontend-effects dataset. Same pixel geometry (16x16, 50x12.5 um pitch,
-centered incidence) between the two datasets, so the summary plot's
-reference lines (+-25um x, +-6.25um y = half-pixel bounds) carry over
-unchanged.
+Evaluate the pixelAV-matched Stage 1.5 (ViT, frozen hard-digitized
+thresholds, no-noise TFRs, MDMM) run: residuals, pulls, and summary plots.
+Adapted from eval_pixelav_matched_mdmm.py (Stage 1) -- differs only in the
+model (no SoftQuantizeLayer here; digitization happens in the data generator
+via digitize=True) and in reading a single summary.json rather than
+selecting the best of many threshold_runs.jsonl entries, since Stage 1.5's
+retry loop only ever keeps the one successful attempt.
 
---fingerprint is optional, same as the template -- defaults to the best
-(lowest best_val_loss) non-stuck run in threshold_runs_pixelav_matched_mdmm.jsonl.
+Val set: TFR_files/2t/ (no-noise), digitized on the fly with the frozen
+Stage 1 median thresholds -- must match train_vit_part1p5_pixelav_matched_mdmm.py's
+own validation_generator construction exactly (same digitize_thresholds/
+digitize_levels, same seed) for the loaded weights to be evaluated on the
+same input distribution they were trained on.
 """
 import os
 import sys
@@ -29,7 +31,6 @@ import tensorflow as tf
 from tensorflow.keras import layers
 import keras
 
-# repo root (two levels up from raw_pixelAV_training/plotting/) for DG/models/utils imports
 repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, repo_root)
 
@@ -37,18 +38,18 @@ import utils
 utils.check_GPU()
 
 from DG.OptimizedDataGenerator_v3 import OptimizedDataGenerator
-from models.SoftQuantizeLayer import SoftQuantizeLayer
 
 pi = 3.14159265359
 minval = 1e-9
 
 # ---------------------------------------------------------------- configuration
 dataset_base_dir = "/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence"
-trained_models_dir = os.path.join(dataset_base_dir, "trained_models_rnd_thr_mdmm")
-threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_pixelav_matched_mdmm.jsonl")
-tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files", "2t_N_0.0mu_80.0sig_NoLog_Stdr", "TFR_val")
+rnd_thr_dir = os.path.join(dataset_base_dir, "trained_models_rnd_thr_mdmm")
+median_thresholds_path = os.path.join(rnd_thr_dir, "median_thresholds_pixelav_matched_mdmm.json")
+part1p5_output_dir = os.path.join(rnd_thr_dir, "part1p5_vit")
+tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files", "2t", "TFR_val")  # no-noise
 out_base = os.path.dirname(os.path.abspath(__file__))
-CASE_TAG = "pixelAV-matched, Stage 1 ViT rnd_thr, MDMM"
+CASE_TAG = "pixelAV-matched, Stage 1.5 ViT frozen thresholds, no_noise, MDMM"
 
 # ------------------------------------------------- model (identical to training)
 class PatchExtractor(layers.Layer):
@@ -108,22 +109,9 @@ def create_vit_model(input_shape=(16,16,2),
                      ff_dim=128,
                      num_layers=4,
                      dropout=0.1,
-                     final_outputs=14,
-                     initial_thresholds=None,
-                     threshold_offset=0.0):
-  inp = layers.Input(shape=input_shape, name="raw_input")
-  q_out = SoftQuantizeLayer(
-      n_bits=2,
-      initial_levels=np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32),
-      threshold_offset=threshold_offset,
-      initial_thresholds=initial_thresholds,
-      trainable_levels=False,
-      trainable_thresholds=True,
-      initial_k=1.0,
-      trainable_k=True,
-      name="soft_quantizer_output"
-  )(inp)
-  patches = PatchExtractor(patch_size=patch_size)(q_out)
+                     final_outputs=14):
+  inp = layers.Input(shape=input_shape, name="digitized_input")
+  patches = PatchExtractor(patch_size=patch_size)(inp)
   H, W, C = input_shape
   ph, pw  = patch_size
   num_patches = (H // ph) * (W // pw)
@@ -141,32 +129,26 @@ def create_vit_model(input_shape=(16,16,2),
 # ----------------------------------------------------------- run selection
 parser = argparse.ArgumentParser()
 parser.add_argument('--fingerprint', type=str, default=None,
-                    help="evaluate this run instead of the best-NLL one")
+                    help="evaluate this run instead of auto-discovering the one summary.json")
 args = parser.parse_args()
 
-records = [json.loads(l) for l in open(threshold_runs_path) if l.strip()]
-# MDMM journal is an event log -- "started"/"failed"/"abandoned" records have no
-# best_val_loss, so filter to completed runs before selecting.
-records = [r for r in records
-           if r.get("status") == "completed" and not r.get("stuck", False)]
+summary_paths = glob.glob(os.path.join(part1p5_output_dir, "**", "summary.json"), recursive=True)
 if args.fingerprint:
-    record = next(r for r in records if r["fingerprint"] == args.fingerprint)
-else:
-    record = min(records, key=lambda r: r["best_val_loss"])
+    summary_paths = [p for p in summary_paths if args.fingerprint in p]
+record = json.load(open(min(summary_paths, key=os.path.getmtime)))
 
 fingerprint = record["fingerprint"]
+fixed_thresholds = record["fixed_thresholds"]
+fixed_levels = record["fixed_levels"]
 print(f"Evaluating run {fingerprint} (seed={record['seed']}, "
       f"best_val_loss={record['best_val_loss']:.1f}, "
-      f"final_thresholds={[round(t,2) for t in record['final_thresholds']]})")
+      f"fixed_thresholds={fixed_thresholds})")
 
 plot_dir = os.path.join(out_base, fingerprint)
 os.makedirs(plot_dir, exist_ok=True)
 
 # --------------------------------------------------- build model + load weights
-model = create_vit_model(
-    initial_thresholds=record["init_thresholds"],
-    threshold_offset=record["threshold_offset"],
-)
+model = create_vit_model()
 
 checkpoints_dir = os.path.join(record["checkpoint_dir"], "checkpoints")
 
@@ -182,11 +164,18 @@ print(f"Loading best checkpoint (val_loss={extract_val_metric(os.path.basename(b
 model.load_weights(best_ckpt)
 
 # ------------------------------------------------------------- data + predict
-# shuffle=False so model.predict() and the truth-collection loop see identical order
+# Same digitize=True/digitize_thresholds/digitize_levels as training's own
+# validation_generator -- must match exactly for the loaded weights to see
+# the same input distribution they were trained on. shuffle=False here
+# (unlike training) so model.predict() and the truth-collection loop below
+# see identical example order.
 test_generator = OptimizedDataGenerator(
     load_from_tfrecords_dir=tfrecords_dir_val,
     shuffle=False,
     quantize=False,
+    digitize=True,
+    digitize_thresholds=fixed_thresholds,
+    digitize_levels=fixed_levels,
 )
 labels_scale = test_generator.labels_scale
 print(f"labels_scale = {labels_scale}")
@@ -227,11 +216,7 @@ df.to_csv(os.path.join(plot_dir, "predictions.csv"), header=True, index=False)
 # Standard collapse diagnostic (same pattern as every other
 # plot_pred_angle_dists_*.py in this repo): predicted vs true cotA/cotB
 # distributions -- a collapsed/shrunk prediction shows up here as a narrow
-# spike vs. the true distribution's spread. Folded directly into this eval
-# script (rather than the separate plot_pred_angle_dists_pixelav_matched_mdmm.py
-# invocation) so it's produced automatically on every eval run, not just when
-# separately remembered -- decided 2026-09-09, applies to every eval_*.py in
-# this dataset's pipeline going forward.
+# spike vs. the true distribution's spread.
 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 for ax, var, name in [(axes[0], "cotA", r"$\cot\alpha$"), (axes[1], "cotB", r"$\cot\beta$")]:
     lo = min(df[var + "true"].min(), df[var].quantile(0.01))

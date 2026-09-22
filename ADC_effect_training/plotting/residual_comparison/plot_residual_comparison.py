@@ -44,22 +44,28 @@ here = os.path.dirname(os.path.abspath(__file__))
 # which architectures to actually draw (keys match the JSON files' own naming)
 ARCHS = ["transformer", "max_2dconv"]
 ARCH_LABELS = {"transformer": "ViT", "max_2dconv": "Max Conv2D"}
-DATASETS = ["pixelav", "frontend", "no_noise"]
+DATASETS = ["pixelav", "pixelav_matched", "frontend", "no_noise"]
 DATASET_LABELS = {
     "pixelav": "pixelAV (raw charge, 3sr dataset)",
+    "pixelav_matched": "pixelAV-matched, no_noise",
     "frontend": "Frontend effects, corr_noise",
     "no_noise": "Frontend effects, no_noise",
 }
 # blue-family for ViT, orange-family for Max Conv2D; darker/solid = frontend
 # (our own realistic result), lighter = pixelAV (prior reference); no_noise
 # gets its own color per architecture (purple for ViT, green for Max Conv2D)
-# since it's a third condition, not a shade of either existing one
+# since it's a third condition, not a shade of either existing one;
+# pixelav_matched (our own stats-matched, cotBeta-restricted, containment-filtered
+# pixelAV subsample -- a fourth condition, not a shade of the prior team's
+# "pixelav" reference) gets its own color too (brown for ViT)
 GROUP_COLORS = {
     ("transformer", "frontend"): "tab:blue",
     ("transformer", "pixelav"): "tab:cyan",
+    ("transformer", "pixelav_matched"): "tab:brown",
     ("transformer", "no_noise"): "tab:purple",
     ("max_2dconv", "frontend"): "tab:orange",
     ("max_2dconv", "pixelav"): "tab:red",
+    ("max_2dconv", "pixelav_matched"): "tab:olive",
     ("max_2dconv", "no_noise"): "tab:green",
 }
 VARIANTS = ["1-noquant_20t", "2-noquant_2t", "3-input_dig_2t", "4-quantized"]
@@ -70,19 +76,28 @@ VARIANT_LABELS = {
     "4-quantized": "Quantized NN",
 }
 VARIANT_MARKERS = {"1-noquant_20t": "D", "2-noquant_2t": "o", "3-input_dig_2t": "s", "4-quantized": "^"}
+# Within-row vertical offsets per variant (indexed same as VARIANTS): uniform
+# 0.15 spacing within each precision-family pair (20t/2t, then input_dig/
+# quantized), with a slightly wider 0.22 gap between the two pairs -- keeps
+# the four markers from reading as one undifferentiated stack when a row has
+# all four (e.g. the pixelAV prior-team reference).
+VARIANT_Y_OFFSETS = [0.30, 0.15, -0.15, -0.30]
 QUANTITIES = [("x", r"$R_x$ [um]"), ("y", r"$R_y$ [um]"),
               ("A", r"$R_\alpha$ [deg]"), ("B", r"$R_\beta$ [deg]")]
 
-# explicit row order (top to bottom): pixelAV rows first (grouped together,
-# any architecture), then ViT frontend (corr_noise, then no_noise), then
-# Max Conv2D frontend (corr_noise, then no_noise)
+# explicit row order (top to bottom), per direct request 2026-09-09: pixelAV
+# rows first (grouped together, any architecture; prior-team reference then
+# our own pixelav_matched result), then no_noise (ViT, then Max Conv2D),
+# then frontend corr_noise (ViT, then Max Conv2D)
 GROUP_ORDER = [
     ("max_2dconv", "pixelav"),
     ("transformer", "pixelav"),
-    ("transformer", "frontend"),
+    ("transformer", "pixelav_matched"),
+    ("max_2dconv", "pixelav_matched"),
     ("transformer", "no_noise"),
-    ("max_2dconv", "frontend"),
     ("max_2dconv", "no_noise"),
+    ("transformer", "frontend"),
+    ("max_2dconv", "frontend"),
 ]
 
 
@@ -96,7 +111,8 @@ def load(name):
 
 
 def main():
-    data = {"pixelav": load("pixelav_3sr"), "frontend": load("frontend"), "no_noise": load("no_noise")}
+    data = {"pixelav": load("pixelav_3sr"), "pixelav_matched": load("pixelav_matched"),
+            "frontend": load("frontend"), "no_noise": load("no_noise")}
 
     groups = [g for g in GROUP_ORDER if g[0] in ARCHS and
               any(variant in data[g[1]].get(g[0], {}) for variant in VARIANTS)]
@@ -106,10 +122,56 @@ def main():
 
     fig, axes = plt.subplots(1, 4, figsize=(20, 0.7 * len(groups) + 2), sharey=True)
 
-    y_positions = list(range(len(groups), 0, -1))
+    # Rows pair up visually (tighter gap) when adjacent groups share the same
+    # dataset condition and differ only by architecture (e.g. ViT vs Max Conv2D
+    # both on pixelav_matched) -- makes the ViT/Max Conv2D comparison at a given
+    # condition easy to read at a glance without merging the two rows together.
+    NORMAL_GAP = 1.0
+    PAIR_GAP = 0.5
+    cur_y = float(len(groups))
+    y_positions = [cur_y]
+    for i in range(1, len(groups)):
+        same_condition = groups[i][1] == groups[i - 1][1]
+        cur_y -= PAIR_GAP if same_condition else NORMAL_GAP
+        y_positions.append(cur_y)
+
+    # Precompute each row's actual marker y-values (only for variants present),
+    # then derive: (1) a box spanning any same-dataset-condition pair of rows
+    # (e.g. ViT+Max Conv2D both on pixelav_matched), and (2) for a row with all
+    # four variants (currently only the pixelAV prior-team reference), a box
+    # around the whole row plus a faint divider between the full-precision
+    # pair (top 2) and the digitized/quantized pair (bottom 2).
+    row_marker_ys = []
+    for (arch, dataset), y0 in zip(groups, y_positions):
+        variants_here = data[dataset].get(arch, {})
+        ys = [y0 + VARIANT_Y_OFFSETS[i] for i, variant in enumerate(VARIANTS) if variant in variants_here]
+        row_marker_ys.append(ys)
+
+    BOX_PAD = 0.12
+    group_boxes = []
+    divider_ys = []
+    for gi, ys in enumerate(row_marker_ys):
+        if not ys:
+            continue
+        if len(ys) == 4:
+            group_boxes.append((min(ys) - BOX_PAD, max(ys) + BOX_PAD))
+            divider_ys.append(y_positions[gi])  # offsets are symmetric around y0
+        if gi > 0 and groups[gi][1] == groups[gi - 1][1] and row_marker_ys[gi - 1]:
+            combined = row_marker_ys[gi - 1] + ys
+            group_boxes.append((min(combined) - BOX_PAD, max(combined) + BOX_PAD))
 
     for ax, (quantity, xlabel) in zip(axes, QUANTITIES):
         ax.axvline(0, color="gray", zorder=0, lw=1)
+        for bottom, top in group_boxes:
+            # semi-opaque fill (very light, no edge) + a separately-controlled
+            # dotted edge (higher alpha) -- axhspan's own alpha would apply
+            # uniformly to both, washing out the dotted border if kept light
+            # enough for the fill.
+            ax.axhspan(bottom, top, facecolor="dimgray", edgecolor="none", alpha=0.07, zorder=0)
+            ax.axhspan(bottom, top, facecolor="none", edgecolor="dimgray",
+                       linestyle=":", linewidth=1.3, alpha=0.5, zorder=0)
+        for y in divider_ys:
+            ax.axhline(y, color="gray", alpha=0.25, linewidth=0.8, linestyle="--", zorder=0)
         for (arch, dataset), y0 in zip(groups, y_positions):
             color = GROUP_COLORS[(arch, dataset)]
             variants_here = data[dataset].get(arch, {})
@@ -117,7 +179,11 @@ def main():
                 stats = variants_here.get(variant)
                 if stats is None:
                     continue
-                y = y0 + 0.3 - 0.15 * i
+                # Within a row, the 4 variant markers split into two visual
+                # pairs -- full precision (20t/2t) vs digitized/quantized
+                # (input_dig/quantized) -- with a slightly wider gap between
+                # the pairs than within each pair.
+                y = y0 + VARIANT_Y_OFFSETS[i]
                 mean = stats[f"mean_{quantity}"]
                 up = stats[f"up68_{quantity}"]
                 down = stats[f"down68_{quantity}"]
@@ -138,7 +204,7 @@ def main():
         ax.set_yticks([])
         ax.grid(True, axis="x", alpha=0.3)
 
-    axes[0].set_ylim(0.5, len(groups) + 0.8)
+    axes[0].set_ylim(min(y_positions) - 0.8, max(y_positions) + 0.8)
 
     # two legends, same style as the original notebooks: colored lines -> (architecture,
     # dataset) group, marker shapes -> precision variant

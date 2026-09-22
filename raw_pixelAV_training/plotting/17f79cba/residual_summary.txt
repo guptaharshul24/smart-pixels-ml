@@ -1,0 +1,5 @@
+run 17f79cba (pixelAV-matched, Stage 2.5 QConv2D, frozen thresholds, no_noise, MDMM), checkpoint weights.796-t-23444.54-v-23646.77.weights.h5
+x    : residual mean = -0.3864, std = 14.9309  (scale 122.8935)
+y    : residual mean = -0.1454, std = 3.4409  (scale 30.9479)
+cotA : residual mean = -0.0053, std = 0.5908  (scale 6.5030)
+cotB : residual mean = +0.0013, std = 0.1572  (scale 1.8711)

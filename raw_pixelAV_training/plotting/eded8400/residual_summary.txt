@@ -1,0 +1,5 @@
+run eded8400 (pixelAV-matched, Stage 2 non-quantized Conv2D, frozen thresholds, no_noise, MDMM), checkpoint weights.4983-t-32955.43-v-32985.12.weights.h5
+x    : residual mean = +0.5199, std = 11.9186  (scale 122.8935)
+y    : residual mean = -0.0878, std = 2.9581  (scale 30.9479)
+cotA : residual mean = -0.0058, std = 0.3288  (scale 6.5030)
+cotB : residual mean = +0.0031, std = 0.1007  (scale 1.8711)

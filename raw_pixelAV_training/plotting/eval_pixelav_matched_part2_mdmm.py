@@ -1,15 +1,9 @@
 """
-Evaluate a pixelAV-matched Stage 1 (ViT, trainable SoftQuantizeLayer) run:
-residuals, pulls, and summary (money) plots. Adapted from
-ADC_effect_training/plotting/transformer_eval_2ns5ns/eval_transformer_2ns5ns.py,
-pointed at dataset_3srb_16x16_50x12P5_centeredIncidence instead of our own
-frontend-effects dataset. Same pixel geometry (16x16, 50x12.5 um pitch,
-centered incidence) between the two datasets, so the summary plot's
-reference lines (+-25um x, +-6.25um y = half-pixel bounds) carry over
-unchanged.
-
---fingerprint is optional, same as the template -- defaults to the best
-(lowest best_val_loss) non-stuck run in threshold_runs_pixelav_matched_mdmm.jsonl.
+Evaluate the pixelAV-matched Stage 2 (non-quantized Conv2D, frozen
+hard-digitized thresholds, no-noise TFRs, MDMM) run: residuals, pulls, and
+summary plots. Same pattern as eval_pixelav_matched_part1p5_mdmm.py, but
+loading CreateNonQuantizedModel from train_conv2d_part2_pixelav_matched_mdmm.py
+instead of building a ViT.
 """
 import os
 import sys
@@ -26,147 +20,56 @@ import seaborn as sns
 from scipy.optimize import curve_fit
 
 import tensorflow as tf
-from tensorflow.keras import layers
-import keras
+import tensorflow_probability as tfp  # must precede `from qkeras import *` -- see losses.loss import-order note
 
-# repo root (two levels up from raw_pixelAV_training/plotting/) for DG/models/utils imports
 repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, repo_root)
+sys.path.insert(0, os.path.join(repo_root, "raw_pixelAV_training"))
 
 import utils
 utils.check_GPU()
 
 from DG.OptimizedDataGenerator_v3 import OptimizedDataGenerator
-from models.SoftQuantizeLayer import SoftQuantizeLayer
+from losses.loss import custom_loss
+from train_conv2d_part2_pixelav_matched_mdmm import CreateNonQuantizedModel
 
 pi = 3.14159265359
 minval = 1e-9
 
 # ---------------------------------------------------------------- configuration
 dataset_base_dir = "/work/projects/SmartPixML/dataset_3srb_16x16_50x12P5_centeredIncidence"
-trained_models_dir = os.path.join(dataset_base_dir, "trained_models_rnd_thr_mdmm")
-threshold_runs_path = os.path.join(trained_models_dir, "threshold_runs_pixelav_matched_mdmm.jsonl")
-tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files", "2t_N_0.0mu_80.0sig_NoLog_Stdr", "TFR_val")
+rnd_thr_dir = os.path.join(dataset_base_dir, "trained_models_rnd_thr_mdmm")
+part2_output_dir = os.path.join(rnd_thr_dir, "part2_conv2d")
+tfrecords_dir_val = os.path.join(dataset_base_dir, "TFR_files", "2t", "TFR_val")  # no-noise
 out_base = os.path.dirname(os.path.abspath(__file__))
-CASE_TAG = "pixelAV-matched, Stage 1 ViT rnd_thr, MDMM"
-
-# ------------------------------------------------- model (identical to training)
-class PatchExtractor(layers.Layer):
-  """Extract 2D patches from images."""
-  def __init__(self, patch_size=(3,7)):
-    super().__init__()
-    self.patch_size = patch_size
-
-  def call(self, images):
-    patch_h, patch_w = self.patch_size
-    batch_size = tf.shape(images)[0]
-    patches = tf.image.extract_patches(
-        images=images,
-        sizes=(1, patch_h, patch_w, 1),
-        strides=(1, patch_h, patch_w, 1),
-        rates=(1,1,1,1),
-        padding='VALID'
-    )
-    patch_dims = tf.shape(patches)[-1]
-    patches = tf.reshape(patches, [batch_size, -1, patch_dims])
-    return patches
-
-class PatchEncoder(layers.Layer):
-  """Linear embedding + learnable positional encoding."""
-  def __init__(self, num_patches, embed_dim):
-    super().__init__()
-    self.num_patches = num_patches
-    self.projection  = layers.Dense(embed_dim)
-    self.pos_embed   = tf.Variable(
-        initial_value=tf.zeros((1,num_patches,embed_dim)),
-        trainable=True,
-        name="pos_embedding"
-    )
-
-  def call(self, patch_batch):
-    projected = self.projection(patch_batch)
-    return projected + self.pos_embed
-
-def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0.1):
-  x = layers.LayerNormalization(epsilon=1e-6)(inputs)
-  x = layers.MultiHeadAttention(num_heads=num_heads,
-                                key_dim=head_size,
-                                dropout=dropout)(x, x)
-  x = layers.Dropout(dropout)(x)
-  res = x + inputs
-  x = layers.LayerNormalization(epsilon=1e-6)(res)
-  x = layers.Dense(ff_dim, activation="relu")(x)
-  x = layers.Dropout(dropout)(x)
-  x = layers.Dense(inputs.shape[-1], activation="linear")(x)
-  x = layers.Dropout(dropout)(x)
-  return x + res
-
-def create_vit_model(input_shape=(16,16,2),
-                     patch_size=(3,4),
-                     embed_dim=64,
-                     num_heads=4,
-                     ff_dim=128,
-                     num_layers=4,
-                     dropout=0.1,
-                     final_outputs=14,
-                     initial_thresholds=None,
-                     threshold_offset=0.0):
-  inp = layers.Input(shape=input_shape, name="raw_input")
-  q_out = SoftQuantizeLayer(
-      n_bits=2,
-      initial_levels=np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32),
-      threshold_offset=threshold_offset,
-      initial_thresholds=initial_thresholds,
-      trainable_levels=False,
-      trainable_thresholds=True,
-      initial_k=1.0,
-      trainable_k=True,
-      name="soft_quantizer_output"
-  )(inp)
-  patches = PatchExtractor(patch_size=patch_size)(q_out)
-  H, W, C = input_shape
-  ph, pw  = patch_size
-  num_patches = (H // ph) * (W // pw)
-  encoded_patches = PatchEncoder(num_patches, embed_dim)(patches)
-  x = encoded_patches
-  for _ in range(num_layers):
-    x = transformer_encoder(x, head_size=embed_dim, num_heads=num_heads,
-                            ff_dim=ff_dim, dropout=dropout)
-  x = layers.LayerNormalization(epsilon=1e-6)(x)
-  x = layers.Flatten()(x)
-  x = layers.Dense(64, activation='relu')(x)
-  outputs = layers.Dense(final_outputs, activation='linear')(x)
-  return keras.Model(inputs=inp, outputs=outputs)
+CASE_TAG = "pixelAV-matched, Stage 2 non-quantized Conv2D, frozen thresholds, no_noise, MDMM"
 
 # ----------------------------------------------------------- run selection
 parser = argparse.ArgumentParser()
 parser.add_argument('--fingerprint', type=str, default=None,
-                    help="evaluate this run instead of the best-NLL one")
+                    help="evaluate this run instead of the best-val-loss one")
 args = parser.parse_args()
 
-records = [json.loads(l) for l in open(threshold_runs_path) if l.strip()]
-# MDMM journal is an event log -- "started"/"failed"/"abandoned" records have no
-# best_val_loss, so filter to completed runs before selecting.
-records = [r for r in records
-           if r.get("status") == "completed" and not r.get("stuck", False)]
+summary_paths = glob.glob(os.path.join(part2_output_dir, "**", "summary.json"), recursive=True)
+if not summary_paths:
+    raise SystemExit(f"No Stage 2 summary.json found under {part2_output_dir} -- has a run completed yet?")
+summaries = [json.load(open(p)) for p in summary_paths]
 if args.fingerprint:
-    record = next(r for r in records if r["fingerprint"] == args.fingerprint)
+    record = next(r for r in summaries if r["fingerprint"] == args.fingerprint)
 else:
-    record = min(records, key=lambda r: r["best_val_loss"])
+    record = min(summaries, key=lambda r: r["best_val_loss"])
 
 fingerprint = record["fingerprint"]
 print(f"Evaluating run {fingerprint} (seed={record['seed']}, "
       f"best_val_loss={record['best_val_loss']:.1f}, "
-      f"final_thresholds={[round(t,2) for t in record['final_thresholds']]})")
+      f"fixed_thresholds={[round(t,2) for t in record['fixed_thresholds']]})")
 
 plot_dir = os.path.join(out_base, fingerprint)
 os.makedirs(plot_dir, exist_ok=True)
 
 # --------------------------------------------------- build model + load weights
-model = create_vit_model(
-    initial_thresholds=record["init_thresholds"],
-    threshold_offset=record["threshold_offset"],
-)
+model = CreateNonQuantizedModel(shape=(16, 16, 2), output=14, n_filters=5, pool_size=3)
+model.compile(optimizer=tf.keras.optimizers.Nadam(learning_rate=1e-3), loss=custom_loss)
 
 checkpoints_dir = os.path.join(record["checkpoint_dir"], "checkpoints")
 
@@ -182,11 +85,16 @@ print(f"Loading best checkpoint (val_loss={extract_val_metric(os.path.basename(b
 model.load_weights(best_ckpt)
 
 # ------------------------------------------------------------- data + predict
-# shuffle=False so model.predict() and the truth-collection loop see identical order
+# Same digitize=True/digitize_thresholds/digitize_levels as training's own
+# validation_generator; shuffle=False here so model.predict() and the
+# truth-collection loop see identical example order.
 test_generator = OptimizedDataGenerator(
     load_from_tfrecords_dir=tfrecords_dir_val,
     shuffle=False,
     quantize=False,
+    digitize=True,
+    digitize_thresholds=record["fixed_thresholds"],
+    digitize_levels=record["fixed_levels"],
 )
 labels_scale = test_generator.labels_scale
 print(f"labels_scale = {labels_scale}")
@@ -227,11 +135,7 @@ df.to_csv(os.path.join(plot_dir, "predictions.csv"), header=True, index=False)
 # Standard collapse diagnostic (same pattern as every other
 # plot_pred_angle_dists_*.py in this repo): predicted vs true cotA/cotB
 # distributions -- a collapsed/shrunk prediction shows up here as a narrow
-# spike vs. the true distribution's spread. Folded directly into this eval
-# script (rather than the separate plot_pred_angle_dists_pixelav_matched_mdmm.py
-# invocation) so it's produced automatically on every eval run, not just when
-# separately remembered -- decided 2026-09-09, applies to every eval_*.py in
-# this dataset's pipeline going forward.
+# spike vs. the true distribution's spread.
 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 for ax, var, name in [(axes[0], "cotA", r"$\cot\alpha$"), (axes[1], "cotB", r"$\cot\beta$")]:
     lo = min(df[var + "true"].min(), df[var].quantile(0.01))
@@ -273,7 +177,7 @@ for ax, (var, tvar, scale, name) in zip(axes.flat, VARS):
     ax.set_xlabel(f"True - predicted {name}")
     ax.set_yscale('log')
     ax.grid(True, alpha=0.3)
-fig.suptitle(f"Residuals: transformer {fingerprint} ({CASE_TAG})")
+fig.suptitle(f"Residuals: {fingerprint} ({CASE_TAG})")
 plt.tight_layout()
 plt.savefig(os.path.join(plot_dir, "residual_hists.png"), dpi=120)
 plt.close()
@@ -285,7 +189,7 @@ for ax, ((var, tvar, scale, name), (svar, srange)) in zip(axes.flat, zip(VARS, s
     ax.hist(df[svar] * scale, bins=np.linspace(*srange, 50), histtype='step')
     ax.set_xlabel(f"predicted sigma {name}")
     ax.grid(True, alpha=0.3)
-fig.suptitle(f"Predicted uncertainties: transformer {fingerprint} ({CASE_TAG})")
+fig.suptitle(f"Predicted uncertainties: {fingerprint} ({CASE_TAG})")
 plt.tight_layout()
 plt.savefig(os.path.join(plot_dir, "sigma_hists.png"), dpi=120)
 plt.close()
@@ -316,7 +220,7 @@ pull_plot(axes[0][0], 'pullx',    r'$x$ pull')
 pull_plot(axes[0][1], 'pully',    r'$y$ pull')
 pull_plot(axes[1][0], 'pullcotA', r'$\cot\alpha$ pull')
 pull_plot(axes[1][1], 'pullcotB', r'$\cot\beta$ pull')
-fig.suptitle(f"Pulls: transformer {fingerprint} ({CASE_TAG})")
+fig.suptitle(f"Pulls: {fingerprint} ({CASE_TAG})")
 plt.tight_layout()
 plt.savefig(os.path.join(plot_dir, "pull.png"), dpi=120)
 plt.close()
@@ -381,7 +285,7 @@ residual_plot_deg(axes[1][0], df, 'cotAtrue', 'cotA', r'$\alpha$ [deg]', scaling
 axes[1][0].axvline(90, color='gray', linestyle=':')
 residual_plot_deg(axes[1][1], df, 'cotBtrue', 'cotB', r'$\beta$ [deg]', scaling=labels_scale[3])
 axes[1][1].axvline(90, color='gray', linestyle=':')
-fig.suptitle(f"Summary: transformer {fingerprint} ({CASE_TAG})", y=1.0)
+fig.suptitle(f"Summary: {fingerprint} ({CASE_TAG})", y=1.0)
 plt.savefig(os.path.join(plot_dir, "summary.png"), dpi=120, bbox_inches='tight')
 plt.close()
 

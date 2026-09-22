@@ -1,10 +1,27 @@
 """
 Builds a cotBeta-restricted, statistics-matched subsample of the raw
 pixelAV charge dataset, for a fair(er) comparison against our own
-frontend-effects pipeline. Targets the ADC-effects dataset's REAL numbers
-exactly: 155,000 train + 40,000 val (confirmed 2026-09-02 from
-TFR_files_2_5_noise_corr_contained's actual generated TFRecords), not a
-generic 195,000-then-split scheme.
+frontend-effects pipeline. Targets 155,000 train + 40,000 val as a per-split
+match to the ADC-effects dataset, not a generic 195,000-then-split scheme.
+
+CAVEAT on those targets (corrected 2026-09-22). They are NOT the ADC-effects
+dataset's true counts, despite what this docstring claimed until now. They
+were derived in 2026-09-02 from TFR_files_2_5_noise_corr_contained by
+counting TFRecord files and multiplying by the nominal batch_size in
+metadata.json -- 31 x 5,000 and 8 x 5,000. That over-counts, because
+_build_batching_plan's tail_tol=0.75 refuses to emit a runt final batch and
+instead splits the remainder in two, so the last two files of each split
+hold ~3,500 rows rather than 5,000:
+
+    train:  29 x 5,000 + 3,519 + 3,518 = 152,037   (not 155,000)
+    val:     6 x 5,000 + 3,960 + 3,959 =  37,919   (not  40,000)
+
+So this subsample is 5,044 events (2.6%) LARGER than the set it matches.
+Immaterial for the residual comparison -- 2.6% more events moves a residual
+width by ~1.3%, far under the differences being measured -- and the file
+structure (31/8) does match exactly, so the targets were left as-is rather
+than regenerating. Sum them from batch_metadata's actual_batch_size, not
+from file count x batch_size, if these ever need to be matched properly.
 
 Source: /work/projects/SmartPixML/datasets_16x16x20_charge/
         dataset_3sr_16x16_50x12P5_centeredIncidence_parquets/{train,test}/
@@ -46,10 +63,12 @@ moot since it doesn't survive containment regardless, and containment can't
 be avoided (needed to match the ADC-effects dataset's own selection). Not
 corrected for; pT reflects whatever this selection naturally produces.
 
-Landing on exact multiples of 5,000 (155,000 = 31x, 40,000 = 8x) means
-TFR-gen's batching produces clean, full-only batches with no tail-splitting
--- matching the ADC-effects dataset's own file structure (31/8 files)
-exactly, not just approximately.
+Being exact multiples of 5,000 (155,000 = 31x, 40,000 = 8x) means TFR-gen's
+batching produces clean, full-only batches with no tail-splitting, giving
+the same 31/8 file structure as the ADC-effects dataset. Note this is a
+consequence of how the targets were derived (file count x batch_size, see
+the caveat above), not the reason they were chosen -- the ADC-effects set
+reaches 31/8 files with ragged tails, this one with uniform 5,000s.
 
 Row order: verified the source parquets are already shuffled (corr(row
 position, cotAlpha/cotBeta/pt) all ~0.0001-0.008, i.e. no positional
