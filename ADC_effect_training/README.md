@@ -138,7 +138,9 @@ ADC_effect_training/
 │   └── residual_comparison/              forest-plot comparison across architectures, dataset
 │                                          conditions and precision variants; adapted from
 │                                          the prior team's compare-res-3sr-ONEBIG.ipynb pattern
-├── campaign_records/                     synced summary.json provenance per campaign
+├── campaign_records/                     synced threshold/seed provenance per campaign.
+│                                          **MDMM only** — live set is mdmm_2ns5ns/corr1e4/
+│                                          (13.001/21.902/57.135 mV); see its README
 ├── delays/                               comparator time-walk study (standalone, not part of
 │                                          any stage's loop) — see below
 └── DG import: DG/OptimizedDataGenerator_v3.py (repo root) — see below

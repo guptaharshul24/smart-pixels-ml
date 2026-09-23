@@ -1,7 +1,8 @@
 # Delay-aware ADC digitization — plan
 
 Status: **design only, nothing implemented.** Open questions in the last section
-must be settled before code is written.
+must be settled before code is written. **Results below use the wrong threshold
+set — see the warning under Inputs -> Thresholds.**
 
 ## Goal
 
@@ -38,17 +39,29 @@ e-) next to `Qth = <X>` (the delay, in seconds).
 
 ### 2. Thresholds
 
-The three thresholds from the **correlated-noise 2ns/5ns** threshold search
-(`campaign_records/noise_corr_contained_2ns5ns/median_thresholds_rnd_thr_noise_corr_contained_2ns5ns.json`),
-median over 5 non-stuck runs:
+> **WRONG SET USED (found 2026-09-23).** Every result below was computed with
+> **13.809455 / 24.07648 / 55.619907 mV**, the medians from the **non-MDMM**
+> corr-noise campaign. The trained models all froze the **MDMM** campaign's set,
+> **13.001228 / 21.901985 / 57.13501 mV**
+> (`campaign_records/mdmm_2ns5ns/corr1e4/median_thresholds_rnd_thr_noise_corr_contained_2ns5ns_mdmm.json`,
+> LUT columns 225 / 375 / 975). The two files differ only by a `_mdmm` suffix and
+> both describe themselves as "corr-noise, contained, 2ns/5ns".
+>
+> The qualitative conclusions hold — ordering, concentration in L1, sub-edge
+> behaviour — but the percentages will shift (the sets differ by roughly -6 %,
+> -9 %, +3 % on th1/th2/th3). **Anything compared against trained weights must be
+> regenerated with the MDMM set.** Resolve thresholds from the training script,
+> which names its file, not by grepping `campaign_records/`. The non-MDMM
+> directory is now tagged `..._BAD-ANGLES-DO-NOT-USE`; non-MDMM runs collapse the
+> angle predictions and are not a valid source for anything.
 
-| threshold | mV | electrons (mV / 0.058) |
+| threshold | used here (non-MDMM) | **correct (MDMM)** |
 | --- | --- | --- |
-| th1 | 13.809455 | ~238 |
-| th2 | 24.076480 | ~415 |
-| th3 | 55.619907 | ~959 |
+| th1 | 13.809455 mV (~238 e-) | **13.001228 mV (~224 e-)** |
+| th2 | 24.076480 mV (~415 e-) | **21.901985 mV (~378 e-)** |
+| th3 | 55.619907 mV (~959 e-) | **57.135010 mV (~985 e-)** |
 
-Levels `[0, 1, 2, 3]`.
+Levels `[0, 1, 2, 3]` either way.
 
 ### 3. Waveforms
 
