@@ -13,8 +13,8 @@ Q_in lookup: **nearest tabulated row**, no interpolation. 1688 e- -> row 1700,
 Q_in ~ 1.9*Q_th) this clamps to row 1 by construction, so the sub-edge case and
 the in-range case are one rule.
 
-The Q_th axis is likewise nearest-column, never interpolated: 238.1 e- -> 250,
-415.1 -> 425, 959.0 -> 950. Adjacent columns differ by <= 0.07 ns.
+The Q_th axis is likewise nearest-column, never interpolated: 224.2 e- -> 225,
+377.6 -> 375, 985.1 -> 975. Adjacent columns differ by <= 0.07 ns.
 
 Superseded variants (a serial/cumulative-delay model; linear interpolation with
 sub-edge clamp / extrapolation / never-fires) are recorded in delay_plan.md.
@@ -46,9 +46,12 @@ WINDOW = 12.5        # ns, auto-zero window
 CHUNK = 500          # events per chunk
 N_FILES = int(sys.argv[1]) if len(sys.argv) > 1 else 1   # of 100 (80 train + 20 test)
 
-# median thresholds, corr-noise 2ns/5ns campaign
-THRESHOLDS_MV = [13.809455, 24.076480, 55.619907]
-LUT_COLUMNS = [250, 425, 950]        # nearest 25 e- grid column to each
+# Median thresholds from the MDMM campaign (campaign_records/mdmm_2ns5ns/corr1e4/) --
+# the set every trained Stage 1.5/2/2.5 froze. NOT the non-MDMM campaign's
+# 13.809/24.076/55.620, which differs only by a "_mdmm" suffix in the filename and
+# whose runs collapse the angles; see campaign_records/README.md.
+THRESHOLDS_MV = [13.001228, 21.901985, 57.135010]
+LUT_COLUMNS = [225, 375, 975]        # nearest 25 e- grid column to each (224.2 / 377.6 / 985.1 e-)
 
 HIST_BINS = np.arange(0.0, 30.0 + 1e-9, 0.05)
 

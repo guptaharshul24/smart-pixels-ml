@@ -1,8 +1,7 @@
 # Delay-aware ADC digitization — plan
 
 Status: **design only, nothing implemented.** Open questions in the last section
-must be settled before code is written. **Results below use the wrong threshold
-set — see the warning under Inputs -> Thresholds.**
+must be settled before code is written.
 
 ## Goal
 
@@ -39,29 +38,28 @@ e-) next to `Qth = <X>` (the delay, in seconds).
 
 ### 2. Thresholds
 
-> **WRONG SET USED (found 2026-09-23).** Every result below was computed with
-> **13.809455 / 24.07648 / 55.619907 mV**, the medians from the **non-MDMM**
-> corr-noise campaign. The trained models all froze the **MDMM** campaign's set,
-> **13.001228 / 21.901985 / 57.13501 mV**
-> (`campaign_records/mdmm_2ns5ns/corr1e4/median_thresholds_rnd_thr_noise_corr_contained_2ns5ns_mdmm.json`,
-> LUT columns 225 / 375 / 975). The two files differ only by a `_mdmm` suffix and
-> both describe themselves as "corr-noise, contained, 2ns/5ns".
->
-> The qualitative conclusions hold — ordering, concentration in L1, sub-edge
-> behaviour — but the percentages will shift (the sets differ by roughly -6 %,
-> -9 %, +3 % on th1/th2/th3). **Anything compared against trained weights must be
-> regenerated with the MDMM set.** Resolve thresholds from the training script,
-> which names its file, not by grepping `campaign_records/`. The non-MDMM
-> directory is now tagged `..._BAD-ANGLES-DO-NOT-USE`; non-MDMM runs collapse the
-> angle predictions and are not a valid source for anything.
+Medians from the **MDMM** campaign
+(`campaign_records/mdmm_2ns5ns/corr1e4/median_thresholds_rnd_thr_noise_corr_contained_2ns5ns_mdmm.json`)
+— the set every trained Stage 1.5 / 2 / 2.5 froze, tagged `fixed_thr_13.00_21.90_57.14` in their
+run dirs.
 
-| threshold | used here (non-MDMM) | **correct (MDMM)** |
-| --- | --- | --- |
-| th1 | 13.809455 mV (~238 e-) | **13.001228 mV (~224 e-)** |
-| th2 | 24.076480 mV (~415 e-) | **21.901985 mV (~378 e-)** |
-| th3 | 55.619907 mV (~959 e-) | **57.135010 mV (~985 e-)** |
+| threshold | mV | electrons (mV / 0.058) | LUT column |
+| --- | --- | --- | --- |
+| th1 | 13.001228 | ~224 | 225 |
+| th2 | 21.901985 | ~378 | 375 |
+| th3 | 57.135010 | ~985 | 975 |
 
-Levels `[0, 1, 2, 3]` either way.
+Levels `[0, 1, 2, 3]`.
+
+> **Earlier results used the wrong set (corrected 2026-09-23).** Everything before this
+> date was computed with 13.809455 / 24.07648 / 55.619907, the **non-MDMM** campaign's
+> medians. The two files differ only by a `_mdmm` suffix and both describe themselves as
+> "corr-noise, contained, 2ns/5ns". Non-MDMM runs collapse the angle predictions, so that
+> campaign is now tagged `..._BAD-ANGLES-DO-NOT-USE`. Resolve thresholds from the training
+> script, which names its file, not by grepping `campaign_records/`. Effect of the swap:
+> total flooring 8.19 % -> **6.79 %**, essentially all of it in th1 (4.05 % -> 2.76 % of all,
+> 34.08 % -> 23.40 % within the bin), since the lower threshold means more overdrive and a
+> lower LUT column.
 
 ### 3. Waveforms
 
@@ -109,7 +107,7 @@ directory is *not* pre-filtered: ~53 % of its rows are atEdge. (The DG also
 dropna's the recon columns; this dataset has no NaNs, so that is a no-op.)
 
 Headline below is the **full dataset, train + test**: 100 files, 399649 raw events
--> **189956 contained clusters** (47.5 %), 48628736 pixels, of which **2584575
+-> **189956 contained clusters** (47.5 %), 48628736 pixels, of which **2630104
 reach at least th1**. Pooling the splits is fine here — this characterises the
 front end, no model is trained, so there is nothing to leak. The count matches the
 DG's own TFR metadata exactly (31 train batches = 152037, 8 val = 37919).
@@ -134,14 +132,14 @@ likewise nearest-column (238.1 -> 250, 415.1 -> 425, 959.0 -> 950).
 
 | | L0 | L1 | L2 | L3 |
 | --- | --- | --- | --- | --- |
-| baseline (no delay) | 46046455 | 308230 | 462488 | 1811563 |
-| with delay | 46149283 | 250487 | 466886 | 1762080 |
+| baseline (no delay) | 46000937 | 310879 | 525004 | 1791916 |
+| with delay | 46071399 | 286574 | 526598 | 1744165 |
 
 ### Migration, of the 74666 pixels with baseline level > 0
 
 | changed | drop 1 | drop 2 | drop 3 | increases |
 | --- | --- | --- | --- | --- |
-| **7.63 %** | 7.62 % | 0.01 % | 0.00 % | 0 |
+| **6.25 %** | 6.25 % | 0.00 % | 0.00 % | 0 |
 
 ### By baseline level
 
@@ -150,10 +148,10 @@ are disjoint and sum correctly. The effect is overwhelmingly concentrated in L1:
 
 | baseline level | pixels | dropped | rate |
 | --- | --- | --- | --- |
-| L1 | 308230 | 102515 | **33.26 %** |
-| L2 | 462488 | 45085 | **9.75 %** |
-| L3 | 1811563 | 49483 | **2.73 %** |
-| total | 2582281 | 197083 | **7.63 %** |
+| L1 | 310879 | 70344 | **22.63 %** |
+| L2 | 525004 | 46157 | **8.79 %** |
+| L3 | 1791916 | 47751 | **2.66 %** |
+| total | 2627799 | 164252 | **6.25 %** |
 
 ### Floored pixels, exclusive by level reached
 
@@ -164,13 +162,13 @@ already past. All rates share one denominator, so they sum to the total.
 
 | reached | pixels | floored | % of all | rate in bin |
 | --- | --- | --- | --- | --- |
-| th1 only | 306864 | 104585 | **4.05 %** | 34.08 % |
-| th2 only | 457345 | 48745 | **1.89 %** | 10.66 % |
-| th3 | 1820366 | 58286 | **2.26 %** | 3.20 % |
-| **TOTAL** | **2584575** | **211616** | **8.19 %** | |
+| th1 only | 310092 | 72572 | **2.76 %** | 23.40 % |
+| th2 only | 519078 | 49249 | **1.87 %** | 9.49 % |
+| th3 | 1800934 | 56769 | **2.16 %** | 3.15 % |
+| **TOTAL** | **2630104** | **178590** | **6.79 %** | |
 
-This total (8.19 %) is larger than the migration figure (7.63 %) because it also
-counts the 2294 pixels that miss the window on `t_k` alone, which the
+This total (6.79 %) is larger than the migration figure (6.25 %) because it also
+counts the 2305 pixels that miss the window on `t_k` alone, which the
 baseline-referenced view excludes.
 
 ### Cluster view
@@ -180,12 +178,12 @@ per-cluster footprint is what matters for training:
 
 | | |
 | --- | --- |
-| above-threshold pixels per cluster | 13.61 mean |
-| floored pixels per cluster | 1.11 mean |
-| clusters with >=1 floored pixel | 124361 (**65.47 %**) |
-| clusters with >=2 | 58250 (30.66 %) |
-| clusters with >=3 | 20921 (11.01 %) |
-| clusters with >=5 | 1509 (0.79 %) |
+| above-threshold pixels per cluster | 13.85 mean |
+| floored pixels per cluster | 0.94 mean |
+| clusters with >=1 floored pixel | 112871 (**59.42 %**) |
+| clusters with >=2 | 46633 (24.55 %) |
+| clusters with >=3 | 14463 (7.61 %) |
+| clusters with >=5 | 757 (0.40 %) |
 
 So an 8 % per-pixel rate means roughly **two thirds of training examples are
 perturbed**, and a third of them in more than one pixel.
@@ -199,9 +197,9 @@ faint cluster-edge pixels carry much of the position information.
 
 | threshold | p50 | p90 | p99 | max | > 12.5 ns | crossings |
 | --- | --- | --- | --- | --- | --- | --- |
-| th1 | 4.53 ns | 9.18 ns | 15.68 ns | 25.48 ns | 4.07 % | 2584575 |
-| th2 | 4.88 ns | 9.12 ns | 14.08 ns | 22.48 ns | 2.14 % | 2277711 |
-| th3 | 5.88 ns | 9.88 ns | 14.88 ns | 20.08 ns | 3.20 % | 1820366 |
+| th1 | 4.43 ns | 8.73 ns | 14.73 ns | 24.33 ns | 2.77 % | 2630104 |
+| th2 | 4.78 ns | 9.28 ns | 14.08 ns | 21.68 ns | 2.12 % | 2320012 |
+| th3 | 5.93 ns | 9.83 ns | 14.78 ns | 19.98 ns | 3.15 % | 1800934 |
 
 ### Why the per-threshold overflow rates do not sum to the migration rate
 
