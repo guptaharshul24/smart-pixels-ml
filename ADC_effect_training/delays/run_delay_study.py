@@ -4,7 +4,7 @@ Baseline and delayed levels both use the same 12.5 ns auto-zero window, so the
 delay is the only difference. With d = 0 the procedure reproduces the current
 Bucketize levels exactly (asserted below).
 
-Threshold k asserts at t_k + d_k. The delays are NOT summed across thresholds:
+Threshold k fires at t_k + d_k (its "fire time"). The delays are NOT summed across thresholds:
 the LUT value at a given Q_th already supersedes the lower ones (confirmed with
 the LUT authors, 2026-09-21).
 
@@ -44,7 +44,9 @@ NT = 101             # slices, 0..20 ns
 NPIX = 256
 WINDOW = 12.5        # ns, auto-zero window
 CHUNK = 500          # events per chunk
-N_FILES = int(sys.argv[1]) if len(sys.argv) > 1 else 1   # of 100 (80 train + 20 test)
+N_FILES = (int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 1)
+# of 100 (80 train + 20 test). isdigit guard: this module is imported by
+# generate_tfr_delay_val_2ns5ns.py, which has its own flags.
 
 # Median thresholds from the MDMM campaign (campaign_records/mdmm_2ns5ns/corr1e4/) --
 # the set every trained Stage 1.5/2/2.5 froze. NOT the non-MDMM campaign's
@@ -86,12 +88,11 @@ def crossing_and_delay(w, lut):
     for th_mv, qt in zip(THRESHOLDS_MV, LUT_COLUMNS):
         above = w >= th_mv
         ever = above.any(axis=1)
+        # First slice at or above threshold. No sub-slice interpolation: the data
+        # is 200 ps native (downsampled from 10 ps before being written to disk)
+        # and the DG has never interpolated, so everything here stays on the grid.
         idx = np.argmax(above, axis=1)
-        i0 = np.clip(idx - 1, 0, NT - 1)
-        v0 = np.take_along_axis(w, i0[:, None, :], 1)[:, 0, :]
-        v1 = np.take_along_axis(w, idx[:, None, :], 1)[:, 0, :]
-        frac = np.where(v1 > v0, (th_mv - v0) / np.maximum(v1 - v0, 1e-9), 0.0)
-        t_cross.append(np.where(ever, (i0 + np.clip(frac, 0, 1)) * DT, np.inf))
+        t_cross.append(np.where(ever, idx * DT, np.inf))
         ch, d = lut[qt]
         delay.append(nearest_row(ch, d, qin))
         subedge.append((qin < ch.min()) & ever)      # reported only; row 1 is used anyway

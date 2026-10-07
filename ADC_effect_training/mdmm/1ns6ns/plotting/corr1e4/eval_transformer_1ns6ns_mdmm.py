@@ -358,3 +358,9 @@ plt.savefig(os.path.join(plot_dir, "summary.png"), dpi=120, bbox_inches='tight')
 plt.close()
 
 print(f"All plots saved to {plot_dir}")
+
+# Predicted-vs-true distributions for angles AND position. Called here so
+# they are part of every eval rather than a separate step that gets skipped;
+# residual width alone hides prediction collapse and sign inversion.
+from pred_dists import make_pred_dists
+make_pred_dists(plot_dir, CASE_TAG)

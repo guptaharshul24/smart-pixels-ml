@@ -146,8 +146,15 @@ ADC_effect_training/
 └── DG import: DG/OptimizedDataGenerator_v3.py (repo root) — see below
 ```
 
+Every `eval_*.py` in the repo ends by calling `make_pred_dists()` from `pred_dists.py` at the repo
+root, which writes `pred_angle_dists.png` and `pred_pos_dists.png` into that run's output directory.
+These overlay the predicted distribution against truth for cotA/cotB and x/y, and print the
+predicted/true std ratio and the correlation on each axis. They are not optional: residual width
+alone cannot distinguish a prediction that tracks truth but hedges toward the centre from one that
+is anti-correlated with it, and the delay pass-through produced both at different stages.
+
 Each stage's `plotting/<stage>/` directory follows the same pattern: `eval_*.py` (residuals, pulls,
-sigma hists, summary "money" plot — run once per completed fingerprint), `plot_pred_angle_dists_*.py`
+sigma hists, summary "money" plot, predicted-vs-true distributions — run once per completed fingerprint), `plot_pred_angle_dists_*.py`
 (reads that eval's `predictions.csv`), `plot_run_losses_*.py` and `plot_mdmm_state_*.py` (read
 `training_log.csv` directly, work mid-training). `status_and_plot.py --part1 --part1p5 --part2p5`
 (flags combine freely) drives all of these across every case in one shot.
@@ -218,41 +225,61 @@ selection) — most filenames encode this directly.
 | `part2p5_no_noise/` | Stage 2.5, no-noise | Same pattern. `plot_run_losses_*` uses an **allowlist** (`INCLUDED_FINGERPRINTS`) rather than an exclusion list — every pre-fix stuck attempt shares this output tree and sits at a wildly different loss scale, so only the real run (`e61b24cc`) is plotted. The eval script sets `TF_USE_LEGACY_KERAS=1`. |
 | `plot_ymidplane_containment_2ns5ns.py` | standalone (loose script, not a subdir) | Diagnostic, not part of any stage's eval loop. Confirms that the contained-cluster selection itself — not the `\|cotBeta\|<2` cut — skews surviving cotBeta negative, and via the fixed `y-midplane = y-entry − 50·cotBeta` relation (`z-entry` is a dataset-wide constant `100` here too) pushes mean y-midplane positive after containment. Same effect documented for the pixelAV-matched subsample in `raw_pixelAV_training/filter_subsample_pixelav.py`'s docstring; this confirms it holds for this dataset's own `contained/` source. |
 | `comparison_stage2_stage3/` | cross-stage | `compare_stage2_stage3.py` — Stage 1.5 vs Stage 2 residuals+uncertainty and pull overlays, adapted from das's `performance_plots.ipynb` multi-model overlay pattern. |
-| `residual_comparison/` | cross-stage, cross-dataset | `aggregate_frontend_results.py` — computes mean + shortest-68%-interval residual stats (plus mean predicted-uncertainty) from our own `predictions.csv` outputs, writing **one JSON per dataset condition**: `residuals_frontend.json` (corr_noise) and `residuals_no_noise.json`. `aggregate_pixelav_matched_results.py` — same stat logic, one more condition: `residuals_pixelav_matched.json`, sourced from `raw_pixelAV_training/`'s own pipeline (ViT Stage 1.5 fp `399ab9d5`, plain Conv2D Stage 2 fp `eded8400`, QConv2D Stage 2.5 fp `17f79cba`; no_noise only so far), using that dataset's own `LABELS_SCALE` (distinct from the frontend dataset's). `plot_residual_comparison.py` — forest-plot comparison (point + asymmetric 68%-interval bar + translucent predicted-uncertainty band) comparing residual performance across architectures/datasets, with precision variant (full precision / digitized inputs / quantized NN) as a sub-category within each; reads all of the above plus an optional `residuals_pixelav_3sr.json` (raw-charge, pre-CSA reference data pulled from the real `dataset3sr/residuals.json` via `convert_dataset3sr_residuals.py` — see `residuals_pixelav.template.json` for the schema if filling in by hand instead). Adapted from upstream's `read-all-models-2s.ipynb`/`compare-res-3sr-ONEBIG.ipynb` aggregation+plot pattern (copied into `plotting/` for reference, not executed directly — see below). Per collaborator confirmation, neither ViT nor Max Conv2D has a genuine full-precision variant on our own dataset (both always operate on digitized input in some form), so the full-precision variants are only populated on the pixelAV side. The `4-quantized` variant is populated for `no_noise`/`max_2dconv` from Stage 2.5's `e61b24cc` (frontend dataset) and `17f79cba` (pixelav_matched dataset). Row order/grouping (which architecture-dataset pairs sit next to each other, sub-gaps between full-precision and digitized/quantized variant markers, dotted grouping boxes) is deliberately curated in `GROUP_ORDER`/`VARIANT_Y_OFFSETS`, not alphabetical or insertion order. |
+| `part2_no_noise_delay/`, `part2p5_no_noise_delay/` | Stages 2/2.5, no-noise + comparator delay | Copies of the no-noise evals pointed at the delayed validation sets. Two differences: `digitize=False`, since those sets store levels already capped by the 12.5 ns window rather than mV, and a `--shift` argument (`0`, `1p6`, `3p2`) that picks the set and tags the output directory, so one script serves all three. Outputs land in `<fingerprint>_shift<tag>/`. The September run on the superseded LUT is kept as `*_SUPERSEDED_oldLUT/`. See `delays/`. |
+| `residual_comparison/` | cross-stage, cross-dataset | `aggregate_frontend_results.py` — computes mean + shortest-68%-interval residual stats (plus mean predicted-uncertainty) from our own `predictions.csv` outputs, writing **one JSON per dataset condition**: `residuals_frontend.json` (corr_noise) and `residuals_no_noise.json`. `aggregate_pixelav_matched_results.py` — same stat logic, one more condition: `residuals_pixelav_matched.json`, sourced from `raw_pixelAV_training/`'s own pipeline (ViT Stage 1.5 fp `399ab9d5`, plain Conv2D Stage 2 fp `eded8400`, QConv2D Stage 2.5 fp `17f79cba`; no_noise only so far), using that dataset's own `LABELS_SCALE` (distinct from the frontend dataset's). `plot_residual_comparison.py` — forest-plot comparison (point + asymmetric 68%-interval bar + translucent predicted-uncertainty band) comparing residual performance across architectures/datasets, with precision variant (full precision / digitized inputs / quantized NN) as a sub-category within each; reads all of the above plus an optional `residuals_pixelav_3sr.json` (raw-charge, pre-CSA reference data pulled from the real `dataset3sr/residuals.json` via `convert_dataset3sr_residuals.py` — see `residuals_pixelav.template.json` for the schema if filling in by hand instead). Adapted from upstream's `read-all-models-2s.ipynb`/`compare-res-3sr-ONEBIG.ipynb` aggregation+plot pattern (copied into `plotting/` for reference, not executed directly — see below). Per collaborator confirmation, neither ViT nor Max Conv2D has a genuine full-precision variant on our own dataset (both always operate on digitized input in some form), so the full-precision variants are only populated on the pixelAV side. The `4-quantized` variant is populated for `no_noise`/`max_2dconv` from Stage 2.5's `e61b24cc` (frontend dataset) and `17f79cba` (pixelav_matched dataset). Row order/grouping (which architecture-dataset pairs sit next to each other, sub-gaps between full-precision and digitized/quantized variant markers, dotted grouping boxes) is deliberately curated in `GROUP_ORDER`/`VARIANT_Y_OFFSETS`, not alphabetical or insertion order. Two comparator-delay conditions are also carried: `no_noise_delay` (delay applied, readout left at 2/5 ns) and `no_noise_delay_retimed` (readout advanced 3.2 ns). Their residuals are 3-30x wider than everything else, so `plot_residual_comparison.py` takes a mode: `main` excludes them and keeps the cross-condition plot readable, `delay` plots them against their own baseline. `plot_residual_comparison_trials.py` holds two experimental layouts that keep all conditions on one figure, an 8-panel zoomed/full pairing and a 3-segment broken axis, pending a choice between them. |
 
-## `delays/` — comparator time-walk study
+## `delays/` — comparator time-walk
 
-Standalone characterisation, not wired into any training stage. Question: the current hard
-digitization assumes a zero-delay comparator, but a real front end has charge-dependent time walk —
-a pixel just over threshold fires late and can miss the 12.5 ns auto-zero window, reading out one
-ADC level low. How much does that move our levels?
+The hard digitization assumes a zero-delay comparator. A real front end has
+charge-dependent time walk: a pixel just over threshold fires late, and if it fires
+late enough it misses the 12.5 ns auto-zero window and reads out a level low. This
+directory injects that effect and measures what it costs the trained networks.
 
 | File | What it does |
 |---|---|
-| `VIZARD_ADC_LUT_PixB_27c_combined_sorted.csv` | Delay LUT, `delay(Q_th, Q_in)`. 120 **column pairs**: `Charge_Qth_<X>` (the `Q_in` axis, e-) beside `Qth = <X>` (delay, s). `Q_th` 25→3000 e- in 25 e- steps; `Q_in` ragged per column, 100 e- steps from that column's first row up to 10k, plus outliers at 50k/100k. Space-padded (`' '`) to 102 rows — blanks must be dropped, not read as 0. |
-| `run_delay_study.py` | The study. Takes a file count as `argv[1]` (100 = full train+test). Asserts `d=0` reproduces the current Bucketize levels. |
-| `delay_plan.md` | Full write-up: method, results, settled decisions, open questions, superseded variants. |
-| `delay_study_results.json` | Dumped counts/confusion matrices from the last run. |
+| `VIZARD_ADC_LUT_PixB_27c_global.csv` | The delay LUT. 2D grid: a `Qin_e` index column and one `Qth_<n>` column per threshold, blank where untabulated. 235 x 264. Two older versions are kept beside it: `..._combined_sorted.csv` (ragged column pairs, superseded) and `..._global_hole_in_th3.csv` (had a coverage gap at 1100-1700 e-). |
+| `lut_loader.py` | Parses the grid, selects **25 e- grid columns only** (225 / 375 / 975 for our thresholds), cross-checks against the old table. Run it directly for a coverage summary. |
+| `lut_delay_stats.py` | Per-column and pooled delay statistics for three thresholds given on the command line, in mV or electrons. |
+| `generate_tfr_delay_val.py` | Builds a delayed validation set for a given `--shift`. Refuses to overwrite, and asserts per batch that a zero-shift rebuild reproduces the source mV bit-for-bit. |
+| `run_delay_study.py` | Standalone characterisation of the 12.5 ns window, independent of the pass-through. Takes a file count as `argv[1]`. |
+| `delay_plan.md` | Full write-up: method, per-pixel delay distributions, results, settled decisions, open questions. |
 
-Method, as settled with the LUT authors: threshold k asserts at `t_k + d_k`, where `t_k` is the
-waveform's first crossing and `d_k` the LUT delay — delays are **not** summed across thresholds, the
-value at a given `Q_th` already supersedes the lower ones. `Q_in` comes from the waveform **peak**,
-not the 20 ns plateau (~6 % of hit pixels are induced-signal transients that decay back to ~0). Both
-LUT axes use **nearest tabulated row/column, no interpolation**; below a column's first row this
-clamps to row 1, which covers the region the LUT leaves untabulated (`Q_in < ~1.9 × Q_th`, 11–28 % of
-crossings).
+**Method.** Per pixel, `Q_in` comes from the waveform peak (not the 20 ns plateau,
+since ~6 % of hit pixels are induced-signal transients that decay back to zero),
+`k_max` is the highest threshold it reaches, and `d` is the LUT value at that
+column's row nearest `Q_in`. One delay per pixel, not three: the LUT gives a
+separate delay per threshold, and a single value is what makes a rigid slide of the
+sampling well defined. Samples are read at shifted slice **indices**,
+`i = round((T + shift - d) / 0.2)`, with no interpolation anywhere, which also
+quantises the delay to 200 ps. Levels are then capped by the fixed 12.5 ns window.
 
-Reads the raw `contained/train`+`contained/test` parquets directly rather than a TFRecord set,
-because it needs all 101 time slices and the TFRs keep only slices 10 and 25. It applies
-`original_atEdge == False` itself — **the `contained/` directory is not pre-filtered**, ~53 % of its
-rows are atEdge, and the DG normally drops them via `select_contained=True`.
+Thresholds are the **MDMM** campaign medians, 13.001 / 21.902 / 57.135 mV. See
+`campaign_records/README.md` for why the non-MDMM campaign must not be used.
 
-Result over the full 189,956 contained clusters (noise-free): **8.19 %** of above-threshold pixels
-are floored a level, all movement downward, essentially all single-level. Exclusive by the level the
-waveform reaches: th1-only 4.05 %, th2-only 1.89 %, th3 2.26 %. Severity is wildly uneven —
-34.1 % of th1-only pixels versus 3.2 % of th3 pixels — so the damage lands on the faint cluster-edge
-pixels that carry much of the position information. In cluster terms, which is what the model sees,
-**65.5 % of clusters have ≥1 floored pixel** and 30.7 % have ≥2.
+**Pass-through.** Three validation sets, evaluated against the frozen Stage 2
+(`64d9b19b`) and Stage 2.5 (`e61b24cc`) no-noise weights. No retraining.
+
+| shift | nominal slices | rationale | occupancy vs baseline |
+|---|---|---|---|
+| 0 | 10, 25 | delay applied, readout unchanged | 35 % |
+| 1.6 ns | 18, 33 | minimum per-pixel delay (1.694) | 60 % |
+| 3.2 ns | 26, 41 | median per-pixel delay (3.117) | 96 % |
+
+At shift 0 the 2 ns channel is **entirely empty**, because the smallest per-pixel
+delay already exceeds 2 ns. Stage 2's x-residual std goes 12.28 (baseline) to 28.16
+(shift 0) to 15.73 (shift 3.2), so re-timing recovers most of the position
+resolution. Angles do not recover: `cotA` stays about 5.8x baseline at every shift,
+since angle information lives in the difference between the two channels and a
+uniform shift cannot restore it.
+
+Eval outputs are in `plotting/part2_no_noise_delay/64d9b19b_shift{0,1p6,3p2}/` and
+`plotting/part2p5_no_noise_delay/e61b24cc_shift{0,1p6,3p2}/`. The delayed sets store
+**levels**, not mV, so those evals run with `digitize=False` and take a `--shift`
+argument.
+
+**Known issue.** LUT column 975, which carries 68 % of the delayed pixels, rises
+from 980 to 1050 e- instead of falling and its dense and coarse sweeps disagree by
+0.4 ns at the seam. Raised with the LUT author; the numbers above carry it.
 
 ## The launch chain (wrapper2-3)
 
@@ -300,9 +327,14 @@ trend-based check (this one, or `EarlyStopping` itself) can express.
   (`mdmm/1ns6ns/run_orchestrator_1ns6ns_mdmm.py`) is built but not launched.
 - **Comparison plot**: `plotting/comparison_stage2_stage3/` still covers only Stage 1.5 vs Stage 2.
   `plotting/residual_comparison/` now includes Stage 2.5 (no-noise, `e61b24cc`) as the
-  `4-quantized` variant, plus a full `pixelav_matched` condition (ViT/plain-Conv2D/QConv2D on the
-  `raw_pixelAV_training/` pipeline, no-noise only) alongside the existing `pixelav`/`frontend`/
-  `no_noise` conditions.
+  `4-quantized` variant, a full `pixelav_matched` condition (ViT/plain-Conv2D/QConv2D on the
+  `raw_pixelAV_training/` pipeline, no-noise only), and the two comparator-delay conditions,
+  alongside the existing `pixelav`/`frontend`/`no_noise` ones. Which of the three layouts to keep
+  for the delay rows is undecided.
+- **Comparator delay**: pass-through done against frozen Stage 2/2.5 weights (see `delays/`).
+  Position largely recovers once the readout is advanced by the median delay; angles do not, staying
+  about 5.8x baseline at every shift. Retraining on the delayed data has not been attempted, and LUT
+  column 975, which carries 68 % of the delayed pixels, still misbehaves near threshold.
 - **`plotting/plot_ymidplane_containment_2ns5ns.py`**: standalone diagnostic (not part of any
   stage's eval loop) confirming that the contained-cluster selection itself, not the `|cotBeta|<2`
   cut, skews surviving cotBeta negative and — via the fixed `y-midplane = y-entry - 50*cotBeta`

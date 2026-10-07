@@ -1,0 +1,5 @@
+run e61b24cc (Part 2.5 no-noise, cold-start (QConv2D, frozen hard-digitized thresholds, MDMM) 2ns/5ns + DELAY, delay shift 1p6), checkpoint weights.1193-t-21167.03-v-20864.39.weights.h5
+x    : residual mean = -2.0111, std = 21.6339  (scale 123.6133)
+y    : residual mean = -0.5975, std = 5.2782  (scale 31.0050)
+cotA : residual mean = +0.0600, std = 2.8628  (scale 6.5124)
+cotB : residual mean = -0.1471, std = 0.8091  (scale 1.8465)

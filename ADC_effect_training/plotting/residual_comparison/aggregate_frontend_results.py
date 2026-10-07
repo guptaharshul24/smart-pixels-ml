@@ -81,6 +81,33 @@ CONDITIONS = {
             "4-quantized": "ADC_effect_training/plotting/part2p5_no_noise/e61b24cc/predictions.csv",
         },
     },
+    # Comparator time-walk pass-through: the SAME weights as no_noise above,
+    # evaluated on delay-shifted val sets. Not a retrain, a single predict() pass.
+    # Each pixel's two samples are read at shifted slice indices,
+    #     i = round((T + shift - d) / 0.2),  T = 2 ns and 5 ns
+    # with d the VIZARD delay at the highest threshold that pixel reaches, and the
+    # resulting level capped by the fixed 12.5 ns auto-zero window.
+    #
+    # shift0  : delay applied, readout left at 2/5 ns. The LUT's smallest per-pixel
+    #           delay is 1.694 ns, so the 2 ns channel is entirely empty. This is
+    #           the cost of the front-end timing with nothing done about it.
+    # shift3p2: readout advanced by the median per-pixel delay (3.117 ns, rounded
+    #           to the 200 ps grid), so a median-delay pixel reads the original
+    #           slices. This is the mitigated operating point.
+    # shift1p6 (the minimum delay) also exists; it sits between the two and is
+    # reported in delays/delay_plan.md rather than carried here.
+    "no_noise_delay": {
+        "max_2dconv": {
+            "3-input_dig_2t": "ADC_effect_training/plotting/part2_no_noise_delay/64d9b19b_shift0/predictions.csv",
+            "4-quantized": "ADC_effect_training/plotting/part2p5_no_noise_delay/e61b24cc_shift0/predictions.csv",
+        },
+    },
+    "no_noise_delay_retimed": {
+        "max_2dconv": {
+            "3-input_dig_2t": "ADC_effect_training/plotting/part2_no_noise_delay/64d9b19b_shift3p2/predictions.csv",
+            "4-quantized": "ADC_effect_training/plotting/part2p5_no_noise_delay/e61b24cc_shift3p2/predictions.csv",
+        },
+    },
 }
 
 

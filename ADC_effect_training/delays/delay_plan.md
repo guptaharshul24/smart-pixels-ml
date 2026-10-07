@@ -1,7 +1,9 @@
-# Delay-aware ADC digitization — plan
+# Delay-aware ADC digitization
 
-Status: **design only, nothing implemented.** Open questions in the last section
-must be settled before code is written.
+Status: **pass-through complete** (2026-10-07). Three delayed validation sets
+generated and evaluated against the frozen Stage 2 and Stage 2.5 no-noise weights.
+No retraining attempted. The largest open uncertainty is column 975 of the LUT,
+which carries 68 % of the delayed pixels and still misbehaves near threshold.
 
 ## Goal
 
@@ -11,343 +13,244 @@ the thresholds instantly. Real front ends have charge-dependent *time walk* — 
 pixel sitting just above threshold fires late, and if it fires late enough it
 misses the readout window and reads out one ADC level low.
 
-This job injects that effect using a delay lookup table and produces a new
-dataset variant to retrain on.
+This work injects that effect from a delay lookup table characterised from the
+circuit design, and measures what it costs the trained networks. The readout
+sampling is then advanced to see how much of the loss is recoverable by re-timing
+alone, without retraining.
 
 ## Inputs
 
 ### 1. Delay LUT
 
-`VIZARD_ADC_LUT_PixB_27c_combined_sorted.csv` — 102 rows x 240 columns, stored as
-120 **column pairs**, one pair per threshold: `Charge_Qth_<X>` (the `Q_in` axis, in
-e-) next to `Qth = <X>` (the delay, in seconds).
+`VIZARD_ADC_LUT_PixB_27c_global.csv`, a 2D grid: a `Qin_e` index column and one
+`Qth_<n>` column per threshold, blank where untabulated. 235 Qin rows x 264 Qth
+columns. It replaces the earlier 120 ragged column-pair layout, kept as
+`VIZARD_ADC_LUT_PixB_27c_combined_sorted.csv`, and an intermediate version with a
+coverage hole, kept as `..._global_hole_in_th3.csv`.
 
-- `Q_th` grid: **25 to 3000 e- in steps of 25** (120 columns).
-- `Q_in` grid is *per column* and ragged: 100 e- steps from that column's minimum up
-  to 10000 e-, plus two far points at 50000 and 100000 e-. Columns are
-  space-padded (`' '`) to 102 rows, so blanks must be dropped, not read as 0.
-  Point count per column runs 102 (at `Q_th=25`) down to 46 (at `Q_th=3000`).
-- Each column starts at `Q_in_min ~ 1.9-2.0 * Q_th` (floored at 100 e-). This is
-  the plot's white region: below it the LUT is simply not tabulated.
-- Delays span **1.40 to 26.65 ns** overall, but the 26 ns tail only exists at
-  `Q_th = 75` / `Q_in = 100`. Delay falls monotonically with `Q_in` at fixed
-  `Q_th`.
-- Axes convert charge -> mV with the existing gain `CvG = 58e-6` V/e-
-  (= 0.058 mV/e-), the same constant already used for the noise model in
-  `generate_tfr_noise_corr_contained_2ns5ns.py:18`.
+Parsed by `lut_loader.py`. Columns are taken from the **25 e- grid only**, giving
+225 / 375 / 975 for our thresholds. The table also carries finer off-grid columns
+closer to arbitrary threshold values, but those are near-threshold patches rather
+than full columns, and mixing them with grid columns would make the threshold the
+delay model assumes drift with `Q_in`.
+
+Values agree with the old table to machine precision above 1100 e- (92 shared rows
+per column). Below that the old bottom-edge rows were revised downward by up to
+0.68 ns, which is where the original sweep was least converged.
+
+**Coverage, old table vs new**, for the three columns in use:
+
+| | threshold | old edge | new edge | old sub-edge band | new band |
+| --- | --- | --- | --- | --- | --- |
+| th1 | 13.00 mV | 23.20 mV | 14.50 mV | 13.00-23.20 | 13.00-14.50 |
+| th2 | 21.90 mV | 40.60 mV | 22.62 mV | 21.90-40.60 | 21.90-22.62 |
+| th3 | 57.14 mV | 104.40 mV | 56.84 mV | 57.14-104.40 | **none** |
+
+For th3 the edge now sits below the threshold, so a pixel that crosses th3 is
+always tabulated. Sub-edge clamping goes from the dominant effect, 11-30 % of
+crossings, to a corner case. `Q_in` also steps 10 e- from 230 to 1000 rather than
+100 e-, which matters because the gradient near the edge of column 225 is about
+16.6 ns per 1000 e-.
+
+**Known problem, column 975.** Columns 225 and 375 peak at their first row
+(15.867 and 13.653 ns) and fall monotonically, as time-walk should. Column 975
+peaks at `Q_in` = 1050 (4.338 ns) and *rises* from 980 to 1050, and its first row
+at 1.005x overdrive gives only 2.749 ns where the other columns reach 13-16 ns at
+comparable overdrive. Its dense and coarse sweeps also fail to join: the
+1700 -> 1800 step is +0.406 ns against +0.023 and +0.066 for the other two.
+Raised with the LUT author; the numbers below carry it.
 
 ### 2. Thresholds
 
 Medians from the **MDMM** campaign
-(`campaign_records/mdmm_2ns5ns/corr1e4/median_thresholds_rnd_thr_noise_corr_contained_2ns5ns_mdmm.json`)
-— the set every trained Stage 1.5 / 2 / 2.5 froze, tagged `fixed_thr_13.00_21.90_57.14` in their
-run dirs.
+(`campaign_records/mdmm_2ns5ns/corr1e4/median_thresholds_rnd_thr_noise_corr_contained_2ns5ns_mdmm.json`),
+the set every trained Stage 1.5 / 2 / 2.5 froze, tagged
+`fixed_thr_13.00_21.90_57.14` in their run dirs.
 
-| threshold | mV | electrons (mV / 0.058) | LUT column |
+| threshold | mV | electrons | LUT column |
 | --- | --- | --- | --- |
 | th1 | 13.001228 | ~224 | 225 |
 | th2 | 21.901985 | ~378 | 375 |
 | th3 | 57.135010 | ~985 | 975 |
 
-Levels `[0, 1, 2, 3]`.
-
-> **Earlier results used the wrong set (corrected 2026-09-23).** Everything before this
-> date was computed with 13.809455 / 24.07648 / 55.619907, the **non-MDMM** campaign's
-> medians. The two files differ only by a `_mdmm` suffix and both describe themselves as
-> "corr-noise, contained, 2ns/5ns". Non-MDMM runs collapse the angle predictions, so that
-> campaign is now tagged `..._BAD-ANGLES-DO-NOT-USE`. Resolve thresholds from the training
-> script, which names its file, not by grepping `campaign_records/`. Effect of the swap:
-> total flooring 8.19 % -> **6.79 %**, essentially all of it in th1 (4.05 % -> 2.76 % of all,
-> 34.08 % -> 23.40 % within the bin), since the lower threshold means more overdrive and a
-> lower LUT column.
+> Work before 2026-09-23 used 13.809455 / 24.07648 / 55.619907, the **non-MDMM**
+> campaign's medians. The two files differ only by a `_mdmm` suffix and describe
+> themselves identically. Non-MDMM runs collapse the angles, so that campaign is
+> tagged `..._BAD-ANGLES-DO-NOT-USE`. Resolve thresholds from the training script,
+> which names its file, not by grepping `campaign_records/`.
 
 ### 3. Waveforms
 
-Verified against `shuffled_3d/contained/train/part.0.parquet`:
+`shuffled_3d/contained/{train,test}/part.*.parquet`: 101 time slices x 256 pixels,
+200 ps steps, 0-20 ns, CSA output in mV. The `contained/` directory is **not**
+pre-filtered; ~53 % of its rows are `original_atEdge == True`, which the DG drops
+via `select_contained=True`. Any script reading these parquets directly must apply
+that cut itself.
 
-- 25856 numeric columns = **101 time slices x 256 pixels**, 200 ps steps,
-  spanning **0–20 ns**. Index 10 = 2 ns, index 25 = 5 ns (the two slices the
-  current training uses). The 12.5 ns deadline falls at index 62.
-- Values are CSA output **in mV**. For ~94 % of hit pixels the trace rises
-  monotonically and saturates toward a plateau by ~20 ns, where
-  plateau = `CvG * Q_in,pixel`. The remaining **6.31 %** are induced-signal
-  transients that spike and decay back toward zero (3.31 % end at or below 0), so
-  `Q_in` is taken from the **waveform peak**, not the plateau — see the corrections
-  note under Results.
-- Observed peak-pixel amplitudes reach ~444 mV (~7.7k e-), comfortably inside the
-  LUT's `Q_in` coverage (which runs to 100k e-). Upper-edge clamping is a non-issue;
-  the *lower* edge is the problem (see below).
+`Q_in` comes from the waveform **peak**, not the 20 ns plateau: ~6 % of hit pixels
+are induced-signal transients that spike and decay back to ~0, sometimes negative,
+for which a plateau-based charge is meaningless. They peak just over threshold
+(median 16.3 mV) and last a single 200 ps slice in 98 % of cases.
 
 ## Algorithm
 
-Per pixel, thresholds in ascending order k = 1, 2, 3:
+Per pixel:
 
-1. `t_k` = time for the analog waveform to reach `th_k` (first crossing, from the
-   101-slice trace).
-2. `d_k` = `LUT(Q_th = th_k, Q_in = pixel charge)`. `Q_in` is one number per pixel
-   (its collected charge), so the three lookups differ only in which `Q_th` column
-   is read — giving three delays per pixel, `d_1 < d_2 < d_3`.
-3. If `t_k + d_k >= 12.5 ns` -> floor to level `k-1` and stop. Else -> assign
-   level `k` and continue to `k+1`.
+1. `Q_in` = peak / `CvG`, with `CvG` = 0.058 mV/e-.
+2. `k_max` = highest threshold the waveform reaches at all.
+3. `d` = LUT at column `k_max`, nearest tabulated row to `Q_in`. One delay per
+   pixel, not three. The LUT gives a separate delay per threshold; a single value
+   is what makes a rigid slide of the sampling well defined, and `d_kmax` is the
+   conservative choice since it over-delays the lower thresholds.
+4. Sample at shifted slice **indices**, no interpolation:
+   `i = round((T + shift - d) / 0.2)` for `T` = 2 ns and 5 ns, value 0 when
+   `T + shift - d <= 0`. Rounding the index also quantises `d` to 200 ps.
+5. `cap` = highest k with `t_k + d_k <= 12.5 ns`, where `t_k` is the first slice
+   at or above `th_k`. The window is **fixed** and does not move with the shift:
+   it is a property of the front-end reset, not of where the ADC samples.
+6. `level = min(Bucketize(sampled mV, thresholds), cap)`.
 
-Result: the ADC code is the highest threshold that makes the 12.5 ns window.
+No interpolation anywhere. The waveforms are 200 ps native, downsampled from 10 ps
+before being written to disk, and the DG has never interpolated: it selects slices
+by integer index and the model only ever sees stored slice values.
 
-Note: `t_k` increases with k (higher threshold crossed later) and so does `d_k`
-(less overdrive at fixed `Q_in`), so the assert time is strictly monotone in k. The sequential "floor to previous" walk therefore collapses to a
-single cut — you can never have th3 make the window while th2 misses it — which
-makes it cheap to vectorize. Confirmed against the real LUT numbers, not assumed.
+## Per-pixel delays
 
-## Results
+Over the val set, 526122 pixels with `k_max >= 1`:
 
-Produced by `run_delay_study.py` (results also dumped to
-`delay_study_results.json`; pass a file count as argv[1]). Noise-free, and the
-**contained-cluster cut is applied** — `original_atEdge == False`, the same cut the
-training pipeline makes via the DG's `select_contained=True`. Note the `contained/`
-directory is *not* pre-filtered: ~53 % of its rows are atEdge. (The DG also
-dropna's the recon columns; this dataset has no NaNs, so that is a no-op.)
+| | column | pixels | share | min | median | mean | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| th1 | 225 | 62130 | 0.118 | 6.411 | 10.429 | 11.163 | 15.867 |
+| th2 | 375 | 104194 | 0.198 | 3.547 | 4.869 | 5.758 | 13.653 |
+| th3 | 975 | 359798 | 0.684 | 1.694 | 2.677 | 2.770 | 4.338 |
+| **all** | | **526122** | | **1.694** | **3.117** | 4.353 | 15.867 |
 
-Headline below is the **full dataset, train + test**: 100 files, 399649 raw events
--> **189956 contained clusters** (47.5 %), 48628736 pixels, of which **2630104
-reach at least th1**. Pooling the splits is fine here — this characterises the
-front end, no model is trained, so there is nothing to leak. The count matches the
-DG's own TFR metadata exactly (31 train batches = 152037, 8 val = 37919).
+The three populations barely overlap: th1 pixels get 6.4-15.9 ns and th3 pixels
+1.7-4.3 ns, so no single shift suits both.
 
-The test: within the 12.5 ns auto-zero window, how many pixels drop an ADC level
-once the LUT delay is applied? Both sides use the same window, so the delay is the
-only difference. Asserted in the script: `d = 0` reproduces the baseline exactly.
+Statistics must be taken over **assigned per-pixel delays**, not over LUT cells.
+Pooling cells gives 2.086 ns, which is wrong for two reasons: the table's rows are
+unevenly spaced in charge, so cell-pooling weights by sweep design rather than
+physics; and a `k_max = 1` pixel sits by definition in the narrow band between th1
+and th2 at the very bottom of column 225, while that column's 168 rows run to
+100000 e-. Its cells median at 2.423 ns, its pixels at 10.429 ns.
 
-Threshold k asserts at `t_k + d_k`. Delays are **not** summed across thresholds —
-the LUT value at a given `Q_th` already supersedes the lower ones (confirmed with
-the LUT authors, 2026-09-21). The serial/cumulative alternative was tested and
-ruled out; its numbers are kept under "Superseded variants" below.
+## Pass-through results
 
-### `Q_in` lookup rule (decided 2026-09-22)
+Three validation sets, generated by `generate_tfr_delay_val.py --shift N`:
 
-**Nearest tabulated row, no interpolation.** 1688 e- -> row 1700, 1610 e- -> row
-1600. Below a column's first row this clamps to row 1 by construction, so the
-sub-edge case and the in-range case are one rule, not two. The `Q_th` axis is
-likewise nearest-column (238.1 -> 250, 415.1 -> 425, 959.0 -> 950).
-
-### Level distribution
-
-| | L0 | L1 | L2 | L3 |
-| --- | --- | --- | --- | --- |
-| baseline (no delay) | 46000937 | 310879 | 525004 | 1791916 |
-| with delay | 46071399 | 286574 | 526598 | 1744165 |
-
-### Migration, of the 74666 pixels with baseline level > 0
-
-| changed | drop 1 | drop 2 | drop 3 | increases |
-| --- | --- | --- | --- | --- |
-| **6.25 %** | 6.25 % | 0.00 % | 0.00 % | 0 |
-
-### By baseline level
-
-Baseline levels are a genuine partition, so unlike the per-threshold rates these
-are disjoint and sum correctly. The effect is overwhelmingly concentrated in L1:
-
-| baseline level | pixels | dropped | rate |
+| set | shift | nominal slices | rationale |
 | --- | --- | --- | --- |
-| L1 | 310879 | 70344 | **22.63 %** |
-| L2 | 525004 | 46157 | **8.79 %** |
-| L3 | 1791916 | 47751 | **2.66 %** |
-| total | 2627799 | 164252 | **6.25 %** |
+| `..._delay_shift0` | 0 | 10, 25 | delay applied, readout unchanged |
+| `..._delay_shift1p6` | 1.6 ns | 18, 33 | minimum per-pixel delay, 1.694 rounded |
+| `..._delay_shift3p2` | 3.2 ns | 26, 41 | median per-pixel delay, 3.117 rounded |
 
-### Floored pixels, exclusive by level reached
+Each stores **levels**, not mV, because a window cap cannot be expressed as a
+voltage without fabricating one. Evaluate with `digitize=False`. Events, order,
+labels and `metadata.json` are inherited from the undelayed set, and each batch
+asserts that a zero-shift rebuild reproduces the source mV bit-for-bit.
 
-Bins are the highest threshold the waveform reaches with **no window and no
-delay** — the level a perfect front end would read out. "Floored" counts anything
-ending below that, whether the delay pushed it past 12.5 ns or `t_k` alone was
-already past. All rates share one denominator, so they sum to the total.
+### Occupancy
 
-| reached | pixels | floored | % of all | rate in bin |
+| | ch0 (2 ns) lit | ch1 (5 ns) lit | total | of baseline |
 | --- | --- | --- | --- | --- |
-| th1 only | 310092 | 72572 | **2.76 %** | 23.40 % |
-| th2 only | 519078 | 49249 | **1.87 %** | 9.49 % |
-| th3 | 1800934 | 56769 | **2.16 %** | 3.15 % |
-| **TOTAL** | **2630104** | **178590** | **6.79 %** | |
+| baseline | 261171 | 471473 | 732644 | 100 % |
+| shift 0 | **0** | 257709 | 257709 | 35 % |
+| shift 1.6 ns | 53220 | 383208 | 436428 | 60 % |
+| shift 3.2 ns | 279324 | 422178 | 701502 | 96 % |
 
-This total (6.79 %) is larger than the migration figure (6.25 %) because it also
-counts the 2305 pixels that miss the window on `t_k` alone, which the
-baseline-referenced view excludes.
+At shift 0 channel 0 is entirely dead, because the smallest per-pixel delay,
+1.694 ns, already exceeds the 2 ns sample time. 1.6 ns recovers only the fastest
+pixels. 3.2 ns restores occupancy to 96 % of baseline.
 
-### Cluster view
+### Residual std, same weights throughout
 
-The readout is per-pixel, but the ML input is the whole 16x16 array, so the
-per-cluster footprint is what matters for training:
+Stage 2, Conv2D, `64d9b19b`:
 
-| | |
+| | x | y | cotA | cotB |
+| --- | --- | --- | --- | --- |
+| baseline | 12.28 | 3.15 | 0.475 | 0.175 |
+| shift 0 | 28.16 | 9.03 | 3.954 | 1.060 |
+| shift 1.6 ns | 18.07 | 5.62 | 2.492 | 0.808 |
+| shift 3.2 ns | **15.73** | **3.91** | 2.750 | **0.647** |
+
+Stage 2.5, QConv2D, `e61b24cc`:
+
+| | x | y | cotA | cotB |
+| --- | --- | --- | --- | --- |
+| baseline | 14.38 | 3.48 | 0.651 | 0.208 |
+| shift 0 | 30.27 | 8.01 | 4.332 | 1.065 |
+| shift 1.6 ns | 21.63 | 5.28 | 2.863 | 0.809 |
+| shift 3.2 ns | **17.40** | **4.13** | 2.913 | **0.644** |
+
+Position largely recovers: Stage 2's x goes 28.16 -> 15.73 against a 12.28
+baseline, and y to 3.91 against 3.15. Biases clear too, Stage 2.5's x mean moving
+from -5.61 to +0.30.
+
+Angles do not. `cotA` improves to 2.75 but stays about 5.8x the baseline, and
+1.6 ns is marginally better than 3.2 ns for `cotA` in both models while being worse
+for everything else. Angle information lives in the difference between the two
+channels, which a uniform shift cannot restore.
+
+The distribution plots carry a detail the residual widths hide: at shift 3.2 the
+angle correlations are **+0.61 and +0.63** with predicted spread 0.59-0.68 of true,
+so the predictions track truth but hedge toward the centre. An earlier run on the
+superseded LUT had them **anti-correlated** at -0.38. Both look merely "degraded"
+by residual width alone, which is why every eval now emits these plots.
+
+## Files
+
+| file | what it does |
 | --- | --- |
-| above-threshold pixels per cluster | 13.85 mean |
-| floored pixels per cluster | 0.94 mean |
-| clusters with >=1 floored pixel | 112871 (**59.42 %**) |
-| clusters with >=2 | 46633 (24.55 %) |
-| clusters with >=3 | 14463 (7.61 %) |
-| clusters with >=5 | 757 (0.40 %) |
+| `lut_loader.py` | parses the 2D LUT, 25 e- grid columns, cross-checks against the old table |
+| `lut_delay_stats.py` | per-column and pooled delay statistics for thresholds given on the command line |
+| `generate_tfr_delay_val.py` | builds a delayed val set for a given `--shift` |
+| `run_delay_study.py` | standalone 12.5 ns window characterisation, `argv[1]` = file count |
+| `delay_study_results.json` | counts and confusion matrices from the last window study |
 
-So an 8 % per-pixel rate means roughly **two thirds of training examples are
-perturbed**, and a third of them in more than one pixel.
-
-A third of the lowest-level pixels are knocked to zero, while L3 barely moves.
-That is the expected shape — L1 pixels sit just over threshold with small charge,
-exactly where the LUT delay is largest. Worth watching in training, since those
-faint cluster-edge pixels carry much of the position information.
-
-### `t_k + delay` distribution
-
-| threshold | p50 | p90 | p99 | max | > 12.5 ns | crossings |
-| --- | --- | --- | --- | --- | --- | --- |
-| th1 | 4.43 ns | 8.73 ns | 14.73 ns | 24.33 ns | 2.77 % | 2630104 |
-| th2 | 4.78 ns | 9.28 ns | 14.08 ns | 21.68 ns | 2.12 % | 2320012 |
-| th3 | 5.93 ns | 9.83 ns | 14.78 ns | 19.98 ns | 3.15 % | 1800934 |
-
-### Why the per-threshold overflow rates do not sum to the migration rate
-
-Contained part.0 (1883 events, 25543 hit pixels, 1874 changed = 7.34 %):
-
-| | crossings | already past 12.5 ns | past 12.5 ns with delay | **newly** pushed |
-| --- | --- | --- | --- | --- |
-| th1 | 25572 | 29 | 996 (3.89 %) | 967 |
-| th2 | 22609 | 48 | 496 (2.19 %) | 448 |
-| th3 | 18070 | 87 | 552 (3.05 %) | 465 |
-
-Three distinct reasons the raw percentages do not add to 7.34 %:
-
-1. **Different denominators.** Each rate divides by its own threshold's crossing
-   count. Put all three over hit pixels (25543) and use only the newly-pushed
-   counts and they do add: 3.79 + 1.75 + 1.82 = **7.36 %** vs 7.34 % actual.
-2. **Already-past pixels.** 29 + 48 + 87 = 164 crossings were past the window
-   before any delay, so the baseline had already excluded them. They inflate the
-   raw column and cause no migration.
-3. **Nested populations.** Crossing th3 implies crossing th1 and th2, so the
-   denominators are nested subsets, not disjoint bins. They reconcile exactly with
-   the baseline levels: 25572-29 = 25543 = L1+L2+L3; 22609-48 = 22561 = L2+L3;
-   18070-87 = 17983 = L3.
-
-**How much is genuine double counting: very little.** By number of thresholds each
-pixel fails — 2024 pixels fail exactly one, 10 fail two, **0 fail all three**. So
-the 2044 raw entries are 2034 distinct pixels plus 10 multi-counted. The migration
-figure itself cannot double count: it comes from a 4x4 confusion matrix, one entry
-per pixel. Attributing each drop to the pixel's own top threshold gives
-L1 961 + L2 448 + L3 465 = 1874 exactly.
-
-The overlap stays small because failing two thresholds needs a pixel to cross both
-*and* be slow on both, while crossing th2/th3 requires large `Q_in`, which means a
-small delay. The two conditions work against each other. A steeper delay curve
-would widen that band.
-
-### Sample size
-
-The headline now uses the **full training set** (80 files, 152037 contained events
-of 320000; ~47.5 % survive the contained cut). Convergence across sample sizes:
-part.0 alone 7.34 %, 12 files 7.56 %, all 80 files **7.64 %** — a single file runs
-about 0.3 pp low, so the full run is worth the ~20 min. `run_delay_study.py N`
-takes the file count as argv[1].
-
-### Superseded variants
-
-**Serial/cumulative delay model** (`t_k + sum_{i<=k} d_i`), ruled out once the LUT
-authors confirmed each entry already supersedes the lower thresholds: it gave
-36.55 % migration (pooled 36.72 %), with 13.85 % / 30.56 % of th2 / th3 crossings
-pushed past the window. It was also inconsistent with the table itself —
-`d_3 < d_1 + d_2` everywhere (2.71 vs 4.60 ns at `Q_in` = 2417 e-), so the delays
-cannot be a running total. Removed from the script.
-
-**Linear interpolation in `Q_in`** with three sub-edge policies, before the
-nearest-row rule was decided: clamp 7.01 %, linear extrapolation below the edge
-10.76 %, never-fires 43.15 %. The chosen nearest-row rule sits alongside clamp, as
-expected — nearest-row and linear interpolation differ by at most half a row step.
-
-Supporting numbers that informed the choice: the delay does **not** collapse onto a
-universal `Q_in/Q_th` curve (at 2x overdrive the normalised delay runs from 1.22 at
-`Q_th`=3000 to 5.13 at `Q_th`=75), so low-`Q_th` columns cannot be borrowed to fill
-the untabulated region. Extrapolating each column's own first-row gradient gave
-sub-edge delays of 4-10 ns (th1 p50 9.19, th2 5.67, th3 4.02 ns), all inside the
-12.5 ns window — which is why never-fires was rejected: those pixels do fire.
-
-### Reading these
-
-1. **The thresholds survive in every variant.** All movement is strictly downward
-   (zero increases, as it must be), all three levels stay populated, and drops are
-   essentially all single-level — multi-level drops stay under 1 % everywhere. The
-   effect is a blurring of the level boundaries, not a collapse.
-2. **The answer spans 7 % to 46 %** depending on two modelling choices that are
-   still open. Ranked by how much they matter:
-   - serial vs parallel, under the clamp policy: 7.0 % -> 37.6 %
-   - clamp vs nofire, under the parallel model: 7.0 % -> 43.7 %
-   - under nofire the two models nearly converge (43.7 % vs 46.3 %), because the
-     sub-edge population dominates and is floored either way.
-3. **th1 is identical in both models**, since the cumulative sum at k=1 is just
-   `d_1`. The models only diverge at th2 and th3 — which is where the serial
-   model's overflow becomes severe (15 % and 31 % of crossings past the window,
-   against 2-3 % for parallel).
-4. **Model A is confirmed** (collaborators, 2026-09-21): the delay tabulated at a
-   given `Q_th` already accounts for the lower thresholds, so `d_k` is used on its
-   own and never summed. Model B is therefore out, and the answer is **7.02 %**
-   (clamp) or **43.67 %** (nofire). Note the numbers say `d_k` is an *absolute*
-   elapsed time to that comparator firing, not a literal running total — across the
-   whole table `d_3 < d_1 + d_2` (2.71 vs 4.60 ns at `Q_in` = 2417 e-), so the
-   earlier delays are superseded rather than stacked. Its reference point must be
-   the threshold crossing rather than charge arrival, since `d_3 = 2.71 ns` is less
-   than the analog rise time `t_3 = 3.45 ns` for that same pixel — which is what
-   makes `t_k + d_k` correct rather than double-counting.
-5. **The LUT's own shape independently argues the same way.** `d_k` scales with
-   overdrive — large at low `Q_in`, growing with `Q_th` — which is the time-walk
-   signature of an independent comparator, not a fixed conversion step. And all
-   columns converge to a common 1.4-1.7 ns floor at high `Q_in`, consistent with
-   three identical comparators each hitting their asymptotic propagation delay.
-   Under a cumulative reading that floor would instead imply ~4.5 ns to reach th3
-   no matter how large the signal. This is inference from the table, not
-   documentation — it needs confirming against the actual architecture.
-
-## Where this has to live
-
-Not in `__getitem__`. The current flow is:
-
-```
-parquet (101 slices) --[prepare_batch_data: keep slices 10,25 + add noise]--> TFRecord (16,16,2)
-TFRecord --[__getitem__: map_to_levels / Bucketize]--> digitized batch
-```
-
-`map_to_levels` runs at *training* time on TFRecords that have already thrown away
-99 of the 101 time slices. Crossing times cannot be recovered there. So the delay
-digitization must happen at **TFRecord creation time**, inside
-`prepare_batch_data`, while the full waveform is still in hand — writing a new,
-already-digitized TFRecord set (e.g. `TFR_files_2_5_noise_corr_contained_delay`)
-that training then consumes with `digitize=False`.
-
-Cost note: reading all 101 slices is ~50x the current column I/O (~400 MB/file at
-4000 rows x 25856 float32). Only slices up to index 62 (12.5 ns) are needed, and
-first-crossing can be accumulated in time-chunks rather than materializing the
-whole array.
+Eval outputs live in `plotting/part2_no_noise_delay/64d9b19b_shift{0,1p6,3p2}/`
+and `plotting/part2p5_no_noise_delay/e61b24cc_shift{0,1p6,3p2}/`. The September
+run on the superseded LUT is kept alongside as `*_SUPERSEDED_oldLUT/`, and the two
+superseded TFR sets as `..._delay_SUPERSEDED_*` on `/work`.
 
 ## Settled
 
-- **Delays are not summed across thresholds.** Assert time is `t_k + d_k`; the LUT
+- **Delays are not summed across thresholds.** Fire time is `t_k + d_k`; the LUT
   value at a given `Q_th` already supersedes the lower ones (LUT authors,
   2026-09-21).
-- **Sub-edge `Q_in` uses row 1**, and **in-range `Q_in` uses the nearest row**, no
-  interpolation (2026-09-22). One rule covers both. `Q_th` likewise nearest-column.
-- **`Q_in` is the waveform peak**, not the 20 ns plateau — ~6 % of hit pixels are
-  induced-signal transients that decay back to ~0.
-- **The study stays noiseless** (2026-09-22). Note this pairs the correlated-noise
-  campaign's thresholds with noise-free waveforms, which is deliberate.
+- **One delay per pixel**, `d_kmax`, which is what makes a rigid slide of the
+  sampling well defined.
+- **Nearest tabulated row for `Q_in`**, nearest 25 e- grid column for `Q_th`, no
+  interpolation on either axis.
+- **`Q_in` is the waveform peak**, not the 20 ns plateau.
+- **No interpolation between time slices.** Sampling is index selection at the
+  native 200 ps granularity, which also quantises the delay. The DG has never
+  interpolated and the model only sees stored slice values.
+- **The 12.5 ns window is fixed** and does not move with the readout shift, so the
+  level cap is identical across all three sets and they differ in one variable.
+- **Output stores levels**, evaluated with `digitize=False`, since a window cap
+  cannot be expressed as a voltage without fabricating one.
+- **The study stays noiseless**, deliberately pairing the correlated-noise
+  campaign's thresholds with noise-free waveforms.
+- **Readout shifts are 0, 1.6 and 3.2 ns**, from the per-pixel minimum and median
+  delay rounded to the slice grid.
 
 ## Open questions
 
-1. **Where do the two sampling slices go?** The 12.5 ns window fixes the level
-   behaviour, but the model input is still two samples. Left at 2 ns and 5 ns the
-   first channel sees almost nothing once delays are applied (median `t_k + d_k` is
-   4.5-5.9 ns). Re-choosing those times — somewhere past the bulk of the
-   `t_k + d_k` distribution — is the natural follow-up.
-2. **One code per pixel, or one per time slice?** A single 12.5 ns latch gives one
-   ADC code per pixel, so the two-slice structure would collapse unless the slices
-   are sampled separately from the delayed comparator outputs. This decides the
-   output shape and needs settling before any TFRecord is written.
-3. **Why does the LUT tabulation stop at `Q_in` ~ 1.9 * `Q_th`?** Not blocking now
-   that row 1 is used for that region, but 11-27 % of crossings land there, so it
-   would be worth knowing whether it is a convergence limit or a design-spec sweep
-   boundary. Extending the LUT below 2x overdrive would remove the guesswork.
-4. **Gain consistency.** Was the LUT (`PixB_27c`) generated with the same
-   `CvG = 58e-6` V/e- front end as our mV dataset? If not, the charge<->mV
-   conversion on the two sides is inconsistent.
+1. **Column 975's near-threshold rows.** Delay rises from 980 to 1050 e- instead of
+   falling, its first row gives 2.749 ns where the other columns reach 13-16 ns at
+   comparable overdrive, and its dense and coarse sweeps disagree by 0.406 ns at
+   the 1700 -> 1800 seam. That column carries 68 % of the delayed pixels, so this
+   is the largest open uncertainty in the numbers. Raised with the LUT author.
+2. **Angles do not recover with a uniform shift.** `cotA` stays about 5.8x baseline
+   at every shift tried, and the minimum shift is marginally better for it than the
+   median while being worse for everything else. Angle information lives in the
+   difference between the two channels, so a per-channel or per-threshold timing
+   scheme may be needed rather than one global offset.
+3. **Gain consistency.** Was the LUT (`PixB_27c`) generated with the same
+   `CvG = 58e-6` V/e- front end as our mV dataset? If not, the charge to mV
+   conversion on the two sides is inconsistent. The raw-charge dataset is the place
+   to check, bearing in mind it is `3sr` rather than this set's `3srb`.
+4. **Training on the delayed data** has not been attempted. Everything here is a
+   pass-through with frozen weights, which bounds the damage but says nothing about
+   how much a retrained network could recover.

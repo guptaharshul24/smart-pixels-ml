@@ -34,6 +34,8 @@ pixelAV side; see aggregate_frontend_results.py's docstring for the full
 reasoning.
 """
 import os
+import sys
+import math
 import json
 import matplotlib
 matplotlib.use("Agg")
@@ -50,6 +52,8 @@ DATASET_LABELS = {
     "pixelav_matched": "pixelAV-matched, no_noise",
     "frontend": "Frontend effects, corr_noise",
     "no_noise": "Frontend effects, no_noise",
+    "no_noise_delay": "Frontend effects, no_noise + delay (readout at 2/5 ns)",
+    "no_noise_delay_retimed": "Frontend effects, no_noise + delay (readout +3.2 ns)",
 }
 # blue-family for ViT, orange-family for Max Conv2D; darker/solid = frontend
 # (our own realistic result), lighter = pixelAV (prior reference); no_noise
@@ -67,6 +71,8 @@ GROUP_COLORS = {
     ("max_2dconv", "pixelav"): "tab:red",
     ("max_2dconv", "pixelav_matched"): "tab:olive",
     ("max_2dconv", "no_noise"): "tab:green",
+    ("max_2dconv", "no_noise_delay"): "tab:pink",
+    ("max_2dconv", "no_noise_delay_retimed"): "tab:brown",
 }
 VARIANTS = ["1-noquant_20t", "2-noquant_2t", "3-input_dig_2t", "4-quantized"]
 VARIANT_LABELS = {
@@ -96,6 +102,8 @@ GROUP_ORDER = [
     ("max_2dconv", "pixelav_matched"),
     ("transformer", "no_noise"),
     ("max_2dconv", "no_noise"),
+    ("max_2dconv", "no_noise_delay"),
+    ("max_2dconv", "no_noise_delay_retimed"),
     ("transformer", "frontend"),
     ("max_2dconv", "frontend"),
 ]
@@ -110,18 +118,25 @@ def load(name):
         return json.load(f)
 
 
-def main():
-    data = {"pixelav": load("pixelav_3sr"), "pixelav_matched": load("pixelav_matched"),
-            "frontend": load("frontend"), "no_noise": load("no_noise")}
+# The comparator-delay condition's residuals are 3-30x wider than every other
+# condition's (worst in the angles), so on shared axes it rescales every panel and
+# compresses the rest into dots on the zero line. Two figures instead of one:
+#   main  -- everything EXCEPT the delay row; the readable cross-condition plot
+#   delay -- Max Conv2D no_noise vs the same weights + delay, full range
+# Broken/shared axes were considered and rejected: the delay bars span zero, so
+# they would straddle any axis break rather than sitting beyond it.
+MODES = {
+    "main":  {"exclude": {"no_noise_delay", "no_noise_delay_retimed"}, "out": "residual_comparison.png",
+              "title": "Residual comparison: Different architectures and pixelAV vs frontend effects"},
+    "delay": {"only": {("max_2dconv", "no_noise"), ("max_2dconv", "no_noise_delay"),
+                       ("max_2dconv", "no_noise_delay_retimed")},
+              "out": "residual_comparison_delay.png",
+              "title": "Comparator time-walk pass-through: same weights, delay-shifted inputs"},
+}
 
-    groups = [g for g in GROUP_ORDER if g[0] in ARCHS and
-              any(variant in data[g[1]].get(g[0], {}) for variant in VARIANTS)]
 
-    if not groups:
-        raise SystemExit("No data found in residuals_frontend.json / residuals_pixelav_3sr.json.")
-
-    fig, axes = plt.subplots(1, 4, figsize=(20, 0.7 * len(groups) + 2), sharey=True)
-
+def row_geometry(groups, data):
+    """-> (y_positions, group_boxes, divider_ys) for a set of rows."""
     # Rows pair up visually (tighter gap) when adjacent groups share the same
     # dataset condition and differ only by architecture (e.g. ViT vs Max Conv2D
     # both on pixelav_matched) -- makes the ViT/Max Conv2D comparison at a given
@@ -150,59 +165,102 @@ def main():
     BOX_PAD = 0.12
     group_boxes = []
     divider_ys = []
+    boxed = set()
     for gi, ys in enumerate(row_marker_ys):
         if not ys:
             continue
         if len(ys) == 4:
             group_boxes.append((min(ys) - BOX_PAD, max(ys) + BOX_PAD))
             divider_ys.append(y_positions[gi])  # offsets are symmetric around y0
+            boxed.add(gi)
         if gi > 0 and groups[gi][1] == groups[gi - 1][1] and row_marker_ys[gi - 1]:
             combined = row_marker_ys[gi - 1] + ys
             group_boxes.append((min(combined) - BOX_PAD, max(combined) + BOX_PAD))
+            boxed.update((gi - 1, gi))
+    # A condition represented by a single architecture (e.g. no_noise_delay, which
+    # only has Max Conv2D) pairs with nothing and has fewer than four variants, so
+    # neither rule above fires and the row would sit unboxed among boxed ones.
+    # Give any such row its own box, so every row reads the same way.
+    for gi, ys in enumerate(row_marker_ys):
+        if ys and gi not in boxed:
+            group_boxes.append((min(ys) - BOX_PAD, max(ys) + BOX_PAD))
+
+    return y_positions, group_boxes, divider_ys
+
+
+def draw_panel(ax, quantity, groups, y_positions, data, group_boxes, divider_ys):
+    """Draw every row for one quantity onto one axis. Caller owns xlim/xlabel."""
+    ax.axvline(0, color="gray", zorder=0, lw=1)
+    for bottom, top in group_boxes:
+        # semi-opaque fill (very light, no edge) + a separately-controlled
+        # dotted edge (higher alpha) -- axhspan's own alpha would apply
+        # uniformly to both, washing out the dotted border if kept light
+        # enough for the fill.
+        ax.axhspan(bottom, top, facecolor="dimgray", edgecolor="none", alpha=0.07, zorder=0)
+        ax.axhspan(bottom, top, facecolor="none", edgecolor="dimgray",
+                   linestyle=":", linewidth=1.3, alpha=0.5, zorder=0)
+    for y in divider_ys:
+        ax.axhline(y, color="gray", alpha=0.25, linewidth=0.8, linestyle="--", zorder=0)
+    for (arch, dataset), y0 in zip(groups, y_positions):
+        color = GROUP_COLORS[(arch, dataset)]
+        variants_here = data[dataset].get(arch, {})
+        for i, variant in enumerate(VARIANTS):
+            stats = variants_here.get(variant)
+            if stats is None:
+                continue
+            # Within a row, the 4 variant markers split into two visual
+            # pairs -- full precision (20t/2t) vs digitized/quantized
+            # (input_dig/quantized) -- with a slightly wider gap between
+            # the pairs than within each pair.
+            y = y0 + VARIANT_Y_OFFSETS[i]
+            mean = stats[f"mean_{quantity}"]
+            up = stats[f"up68_{quantity}"]
+            down = stats[f"down68_{quantity}"]
+            # wide, translucent band: the model's own mean predicted
+            # uncertainty (sigma output), vs. the thin bar's actual measured
+            # 68%-interval spread -- shows whether predicted uncertainty is
+            # well-calibrated. Optional: skipped if not present in the data.
+            up_sigma = stats.get(f"mean_upsigma{quantity}")
+            down_sigma = stats.get(f"mean_downsigma{quantity}")
+            if up_sigma is not None and down_sigma is not None:
+                ax.errorbar(mean, y, xerr=[[down_sigma], [up_sigma]], color=color,
+                            elinewidth=10, alpha=0.2, linestyle="")
+            ax.errorbar(mean, y, xerr=[[down], [up]], color=color,
+                        marker=VARIANT_MARKERS[variant], linestyle="", capsize=3)
+    ax.set_yticks([])
+    ax.grid(True, axis="x", alpha=0.3)
+
+
+
+def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else "main"
+    if mode not in MODES:
+        raise SystemExit(f"mode must be one of {sorted(MODES)}")
+    cfg = MODES[mode]
+
+    data = {"pixelav": load("pixelav_3sr"), "pixelav_matched": load("pixelav_matched"),
+            "frontend": load("frontend"), "no_noise": load("no_noise"),
+            "no_noise_delay": load("no_noise_delay"),
+            "no_noise_delay_retimed": load("no_noise_delay_retimed")}
+
+    groups = [g for g in GROUP_ORDER if g[0] in ARCHS and
+              any(variant in data[g[1]].get(g[0], {}) for variant in VARIANTS)]
+    if "exclude" in cfg:
+        groups = [g for g in groups if g[1] not in cfg["exclude"]]
+    if "only" in cfg:
+        groups = [g for g in groups if g in cfg["only"]]
+
+    if not groups:
+        raise SystemExit("No data found in residuals_frontend.json / residuals_pixelav_3sr.json.")
+
+    fig, axes = plt.subplots(1, 4, figsize=(20, 0.7 * len(groups) + 2), sharey=True)
+
+    y_positions, group_boxes, divider_ys = row_geometry(groups, data)
 
     for ax, (quantity, xlabel) in zip(axes, QUANTITIES):
-        ax.axvline(0, color="gray", zorder=0, lw=1)
-        for bottom, top in group_boxes:
-            # semi-opaque fill (very light, no edge) + a separately-controlled
-            # dotted edge (higher alpha) -- axhspan's own alpha would apply
-            # uniformly to both, washing out the dotted border if kept light
-            # enough for the fill.
-            ax.axhspan(bottom, top, facecolor="dimgray", edgecolor="none", alpha=0.07, zorder=0)
-            ax.axhspan(bottom, top, facecolor="none", edgecolor="dimgray",
-                       linestyle=":", linewidth=1.3, alpha=0.5, zorder=0)
-        for y in divider_ys:
-            ax.axhline(y, color="gray", alpha=0.25, linewidth=0.8, linestyle="--", zorder=0)
-        for (arch, dataset), y0 in zip(groups, y_positions):
-            color = GROUP_COLORS[(arch, dataset)]
-            variants_here = data[dataset].get(arch, {})
-            for i, variant in enumerate(VARIANTS):
-                stats = variants_here.get(variant)
-                if stats is None:
-                    continue
-                # Within a row, the 4 variant markers split into two visual
-                # pairs -- full precision (20t/2t) vs digitized/quantized
-                # (input_dig/quantized) -- with a slightly wider gap between
-                # the pairs than within each pair.
-                y = y0 + VARIANT_Y_OFFSETS[i]
-                mean = stats[f"mean_{quantity}"]
-                up = stats[f"up68_{quantity}"]
-                down = stats[f"down68_{quantity}"]
-                # wide, translucent band: the model's own mean predicted
-                # uncertainty (sigma output), vs. the thin bar's actual measured
-                # 68%-interval spread -- shows whether predicted uncertainty is
-                # well-calibrated. Optional: skipped if not present in the data.
-                up_sigma = stats.get(f"mean_upsigma{quantity}")
-                down_sigma = stats.get(f"mean_downsigma{quantity}")
-                if up_sigma is not None and down_sigma is not None:
-                    ax.errorbar(mean, y, xerr=[[down_sigma], [up_sigma]], color=color,
-                                elinewidth=10, alpha=0.2, linestyle="")
-                ax.errorbar(mean, y, xerr=[[down], [up]], color=color,
-                            marker=VARIANT_MARKERS[variant], linestyle="", capsize=3)
+        draw_panel(ax, quantity, groups, y_positions, data, group_boxes, divider_ys)
         ax.set_xlabel(xlabel)
-        ax.margins(x=0.08)  # auto-scale to whatever's actually plotted, with padding
-                             # so bands/caps aren't flush against the edge
-        ax.set_yticks([])
-        ax.grid(True, axis="x", alpha=0.3)
+        ax.margins(x=0.08)   # padding so bands/caps are not flush to the edge
 
     axes[0].set_ylim(min(y_positions) - 0.8, max(y_positions) + 0.8)
 
@@ -213,15 +271,22 @@ def main():
                       for g in groups]
     variant_handles = [plt.Line2D([0], [0], marker=VARIANT_MARKERS[v], color="black",
                                    linestyle="", label=VARIANT_LABELS[v]) for v in VARIANTS]
-    leg1 = fig.legend(handles=group_handles, loc="upper left", ncol=2,
-                       bbox_to_anchor=(0.02, 1.1), frameon=False)
+    # Anchor by the legends' BOTTOM edge at the top of the axes so they grow
+    # upward. Anchoring the top at a fixed figure-relative y>1 breaks for short
+    # figures: the offset is a fraction of figure height, so with few rows there
+    # is not enough room above and a multi-entry legend spills down over the plot.
+    leg1 = fig.legend(handles=group_handles, loc="lower left", ncol=2,
+                      bbox_to_anchor=(0.02, 1.01), frameon=False)
     fig.add_artist(leg1)
-    fig.legend(handles=variant_handles, loc="upper right", ncol=1,
-               bbox_to_anchor=(0.98, 1.1), frameon=False)
+    fig.legend(handles=variant_handles, loc="lower right", ncol=1,
+               bbox_to_anchor=(0.98, 1.01), frameon=False)
 
-    fig.suptitle("Residual comparison: Different architectures and pixelAV vs frontend effects", y=1.15)
+    # Title clears whichever legend is taller, again in absolute inches.
+    fig_h = 0.7 * len(groups) + 2
+    legend_rows = max(math.ceil(len(group_handles) / 2), len(variant_handles))
+    fig.suptitle(cfg["title"], y=1.01 + (legend_rows * 0.24 + 0.15) / fig_h)
     plt.tight_layout()
-    out_path = os.path.join(here, "residual_comparison.png")
+    out_path = os.path.join(here, cfg["out"])
     plt.savefig(out_path, dpi=120, bbox_inches="tight")
     print(f"saved to {out_path}")
 
